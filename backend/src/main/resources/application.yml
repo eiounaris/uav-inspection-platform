@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: uav-inspection-backend
+  profiles:
+    default: local
+  jackson:
+    time-zone: UTC
+    datatype:
+      datetime:
+        write-dates-as-timestamps: false
+  web:
+    error:
+      include-message: never
+      include-stacktrace: never
+      include-binding-errors: never
+
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: ${SERVER_PORT:8080}
+logging:
+  pattern:
+    level: "%5p [traceId=%X{traceId:-}]"

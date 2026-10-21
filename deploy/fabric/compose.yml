@@ -1,0 +1,194 @@
+name: uav-inspection-fabric
+
+# Project-scoped nodes, DNS aliases and ledger volumes. No host Docker socket is mounted.
+services:
+  orderer:
+    image: hyperledger/fabric-orderer:2.5.16@sha256:e322c57331d37e0a35ffae3cb3d3265a0e852211c0f801f2514cc15b964ffc93
+    restart: unless-stopped
+    stop_grace_period: 30s
+    working_dir: /root
+    command: ["orderer"]
+    environment:
+      FABRIC_CFG_PATH: /etc/hyperledger/fabric
+      FABRIC_LOGGING_SPEC: INFO
+      ORDERER_GENERAL_LISTENADDRESS: 0.0.0.0
+      ORDERER_GENERAL_LISTENPORT: "7050"
+      ORDERER_GENERAL_LOCALMSPID: OrdererMSP
+      ORDERER_GENERAL_LOCALMSPDIR: /var/hyperledger/orderer/msp
+      ORDERER_GENERAL_BOOTSTRAPMETHOD: none
+      ORDERER_CHANNELPARTICIPATION_ENABLED: "true"
+      ORDERER_GENERAL_TLS_ENABLED: "true"
+      ORDERER_GENERAL_TLS_PRIVATEKEY: /var/hyperledger/orderer/tls/server.key
+      ORDERER_GENERAL_TLS_CERTIFICATE: /var/hyperledger/orderer/tls/server.crt
+      ORDERER_GENERAL_TLS_ROOTCAS: "[/var/hyperledger/orderer/tls/ca.crt]"
+      ORDERER_GENERAL_CLUSTER_CLIENTCERTIFICATE: /var/hyperledger/orderer/tls/server.crt
+      ORDERER_GENERAL_CLUSTER_CLIENTPRIVATEKEY: /var/hyperledger/orderer/tls/server.key
+      ORDERER_GENERAL_CLUSTER_ROOTCAS: "[/var/hyperledger/orderer/tls/ca.crt]"
+      ORDERER_ADMIN_LISTENADDRESS: 0.0.0.0:7053
+      ORDERER_ADMIN_TLS_ENABLED: "true"
+      ORDERER_ADMIN_TLS_CERTIFICATE: /var/hyperledger/orderer/tls/server.crt
+      ORDERER_ADMIN_TLS_PRIVATEKEY: /var/hyperledger/orderer/tls/server.key
+      ORDERER_ADMIN_TLS_ROOTCAS: "[/var/hyperledger/orderer/tls/ca.crt]"
+      ORDERER_ADMIN_TLS_CLIENTAUTHREQUIRED: "true"
+      ORDERER_ADMIN_TLS_CLIENTROOTCAS: "[/var/hyperledger/orderer/tls/ca.crt]"
+      ORDERER_OPERATIONS_LISTENADDRESS: 0.0.0.0:9443
+      ORDERER_OPERATIONS_TLS_ENABLED: "false"
+      ORDERER_METRICS_PROVIDER: prometheus
+    ports:
+      - "127.0.0.1:7050:7050"
+      - "127.0.0.1:7053:7053"
+    volumes:
+      - ./healthcheck.sh:/opt/uav/healthcheck.sh:ro
+      - type: bind
+        source: ../../.local/fabric/network/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp
+        target: /var/hyperledger/orderer/msp
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../../.local/fabric/network/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/tls
+        target: /var/hyperledger/orderer/tls
+        read_only: true
+        bind:
+          create_host_path: false
+      - orderer-ledger:/var/hyperledger/production/orderer
+    networks:
+      default:
+        aliases:
+          - orderer.example.com
+    healthcheck:
+      test: ["CMD", "/bin/bash", "/opt/uav/healthcheck.sh", "9443"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  peer0-org1:
+    image: hyperledger/fabric-peer:2.5.16@sha256:09ee75042de9983bfde31ca88a5bf033386351f10a990e4c48264ee50172dee0
+    restart: unless-stopped
+    stop_grace_period: 30s
+    working_dir: /root
+    command: ["peer", "node", "start"]
+    environment:
+      FABRIC_CFG_PATH: /etc/hyperledger/fabric
+      FABRIC_LOGGING_SPEC: INFO
+      CORE_PEER_ID: peer0.org1.example.com
+      CORE_PEER_ADDRESS: peer0.org1.example.com:7051
+      CORE_PEER_LISTENADDRESS: 0.0.0.0:7051
+      CORE_PEER_CHAINCODEADDRESS: peer0.org1.example.com:7052
+      CORE_PEER_CHAINCODELISTENADDRESS: 0.0.0.0:7052
+      CORE_PEER_LOCALMSPID: Org1MSP
+      CORE_PEER_MSPCONFIGPATH: /etc/hyperledger/fabric/msp
+      CORE_PEER_FILESYSTEMPATH: /var/hyperledger/production
+      CORE_PEER_TLS_ENABLED: "true"
+      CORE_PEER_TLS_CERT_FILE: /etc/hyperledger/fabric/tls/server.crt
+      CORE_PEER_TLS_KEY_FILE: /etc/hyperledger/fabric/tls/server.key
+      CORE_PEER_TLS_ROOTCERT_FILE: /etc/hyperledger/fabric/tls/ca.crt
+      CORE_PEER_PROFILE_ENABLED: "false"
+      CORE_PEER_GOSSIP_BOOTSTRAP: peer0.org1.example.com:7051
+      CORE_PEER_GOSSIP_EXTERNALENDPOINT: peer0.org1.example.com:7051
+      CORE_OPERATIONS_LISTENADDRESS: 0.0.0.0:9444
+      CORE_OPERATIONS_TLS_ENABLED: "false"
+      CORE_METRICS_PROVIDER: prometheus
+    ports:
+      - "127.0.0.1:7051:7051"
+    volumes:
+      - ./healthcheck.sh:/opt/uav/healthcheck.sh:ro
+      - type: bind
+        source: ../../.local/fabric/network/peercfg/core.yaml
+        target: /etc/hyperledger/fabric/core.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../../.local/fabric/network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/msp
+        target: /etc/hyperledger/fabric/msp
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../../.local/fabric/network/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls
+        target: /etc/hyperledger/fabric/tls
+        read_only: true
+        bind:
+          create_host_path: false
+      - org1-peer-ledger:/var/hyperledger/production
+    networks:
+      default:
+        aliases:
+          - peer0.org1.example.com
+    healthcheck:
+      test: ["CMD", "/bin/bash", "/opt/uav/healthcheck.sh", "9444"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  peer0-org2:
+    image: hyperledger/fabric-peer:2.5.16@sha256:09ee75042de9983bfde31ca88a5bf033386351f10a990e4c48264ee50172dee0
+    restart: unless-stopped
+    stop_grace_period: 30s
+    working_dir: /root
+    command: ["peer", "node", "start"]
+    environment:
+      FABRIC_CFG_PATH: /etc/hyperledger/fabric
+      FABRIC_LOGGING_SPEC: INFO
+      CORE_PEER_ID: peer0.org2.example.com
+      CORE_PEER_ADDRESS: peer0.org2.example.com:9051
+      CORE_PEER_LISTENADDRESS: 0.0.0.0:9051
+      CORE_PEER_CHAINCODEADDRESS: peer0.org2.example.com:9052
+      CORE_PEER_CHAINCODELISTENADDRESS: 0.0.0.0:9052
+      CORE_PEER_LOCALMSPID: Org2MSP
+      CORE_PEER_MSPCONFIGPATH: /etc/hyperledger/fabric/msp
+      CORE_PEER_FILESYSTEMPATH: /var/hyperledger/production
+      CORE_PEER_TLS_ENABLED: "true"
+      CORE_PEER_TLS_CERT_FILE: /etc/hyperledger/fabric/tls/server.crt
+      CORE_PEER_TLS_KEY_FILE: /etc/hyperledger/fabric/tls/server.key
+      CORE_PEER_TLS_ROOTCERT_FILE: /etc/hyperledger/fabric/tls/ca.crt
+      CORE_PEER_PROFILE_ENABLED: "false"
+      CORE_PEER_GOSSIP_BOOTSTRAP: peer0.org2.example.com:9051
+      CORE_PEER_GOSSIP_EXTERNALENDPOINT: peer0.org2.example.com:9051
+      CORE_OPERATIONS_LISTENADDRESS: 0.0.0.0:9445
+      CORE_OPERATIONS_TLS_ENABLED: "false"
+      CORE_METRICS_PROVIDER: prometheus
+    ports:
+      - "127.0.0.1:9051:9051"
+    volumes:
+      - ./healthcheck.sh:/opt/uav/healthcheck.sh:ro
+      - type: bind
+        source: ../../.local/fabric/network/peercfg/core.yaml
+        target: /etc/hyperledger/fabric/core.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../../.local/fabric/network/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/msp
+        target: /etc/hyperledger/fabric/msp
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../../.local/fabric/network/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls
+        target: /etc/hyperledger/fabric/tls
+        read_only: true
+        bind:
+          create_host_path: false
+      - org2-peer-ledger:/var/hyperledger/production
+    networks:
+      default:
+        aliases:
+          - peer0.org2.example.com
+    healthcheck:
+      test: ["CMD", "/bin/bash", "/opt/uav/healthcheck.sh", "9445"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+networks:
+  default: {}
+
+volumes:
+  orderer-ledger:
+  org1-peer-ledger:
+  org2-peer-ledger:

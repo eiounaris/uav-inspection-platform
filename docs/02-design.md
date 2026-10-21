@@ -3,12 +3,12 @@
 | 项目 | 内容 |
 | --- | --- |
 | 目标版本 | MVP（首版可演示版本） |
-| 更新日期 | 2026-10-19 |
+| 更新日期 | 2026-10-20 |
 | 需求依据 | [01-requirements.md](01-requirements.md) |
 | 架构 | Spring Boot 模块化单体，数据库作为业务状态的权威来源 |
 | Fabric 范围 | 两个业务组织、一个通道、一份链码、两个业务操作 |
 
-本文确定模块、数据模型、接口及关键处理规则，供后续建表和编码使用；示例目录与接口属于设计，不表示代码已实现。
+本文确定模块、数据模型、接口及关键处理规则，供后续建表和编码使用；除明确注明已实现或已验证的内容外，其余目录、模型和接口仍为实施设计。
 
 ## 1. 设计约束与技术选择
 
@@ -21,17 +21,19 @@
 | 项目 | 选型及约束 |
 | --- | --- |
 | 业务运行时 | JDK 21、Maven |
-| Web 与认证 | Spring Boot 4.1.x、Spring Security，具体补丁版在工程初始化时固定 |
+| Web 与认证 | Spring Boot 4.1.1（T002 已构建验证）；Spring Security 在 T008 接入，由 Boot 管理版本 |
 | 持久层 | MyBatis Spring Boot Starter 4.0.x、MySQL 8.4、Flyway 版本化迁移 |
 | 缓存 | Redis，设备在线状态加速；不可作为唯一的业务持久化来源 |
-| 文件 | S3 兼容私有对象存储，通过适配接口接入 |
+| 文件 | S3 兼容私有对象存储，通过适配接口接入；T003 本地实现固定 Garage 2.4.1，采用私有桶和路径式地址 |
 | 消息 | RabbitMQ，持久化队列、持久化消息、发布确认及手动消费确认 |
-| 区块链 | Fabric 2.5.x 开发网络、Fabric Gateway Java 稳定发行版、Java 链码 |
+| 区块链 | Fabric 2.5.16 开发网络（T004 已验证）；Java Gateway 双机构调用及文件检查点跨进程恢复在 T006 已验证 |
+| Java 链接入 | JDK 21、Fabric Gateway 1.13.0、gRPC 1.84.0、Protobuf 4.36.2；2026-10-20 已通过真实网络调用 |
+| 链码运行时 | JDK21、独立 Maven 模块、fabric-chaincode-shim 2.5.11；官方 ContractRouter CaaS 两组织各一实例，Peer 不挂载宿主 Docker socket |
 | 环境 | Docker Compose；Fabric 网络沿用官方测试网络的组织及排序服务结构 |
 
 Spring Boot 的 Java 要求及 MyBatis Starter 的主版本组合分别参照[官方系统要求](https://docs.spring.io/spring-boot/system-requirements.html)和[兼容表](https://mybatis.org/spring-boot-starter/mybatis-spring-boot-autoconfigure/)。工程初始化时先完成启动和连接验证，再锁定具体依赖及镜像版本，不使用浮动 latest 或 SNAPSHOT 作为复现基线。
 
-Fabric 镜像和二进制工具使用同一发行版本，samples 固定对应版本或提交。链码独立构建，使用匹配样例的 JDK 和构建配置，不假定其运行环境与业务服务相同。
+Fabric 镜像和二进制工具使用同一发行版本，samples 固定对应版本或提交。链码在 chaincode/ 以 JDK21 独立构建包含依赖的 JAR，通过官方 ContractRouter 作为外部链码服务运行；两个组织使用同一份业务代码，各自配置对应的链码包 ID。
 
 ## 2. 系统结构
 
@@ -280,29 +282,80 @@ MySQL 业务事务使用 READ COMMITTED。影响任务验收的操作统一先�
 
 使用一个通道 mychannel、链码 evidence、合约 EvidenceContract；Org1MSP 对应 OrgA，Org2MSP 对应 OrgB。两个业务 Peer 各保存账本，排序服务沿用样例的独立排序组织，它不作为第三个业务参与方。
 
-首版使用一个 Raft 排序节点及链码级静态背书策略 AND('Org1MSP.peer','Org2MSP.peer')，不增加状态级背书或多通道。节点背书表示认可一致执行结果，不代表委托方人员已人工复核。[官方测试网络结构](https://hyperledger-fabric.readthedocs.io/en/latest/test_network.html)
+T004 使用独立项目 `uav-inspection-fabric`，版本及 samples commit 见 deploy/fabric/versions.json，节点镜像固定摘要。开发证书由 cryptogen 生成，Peer/Orderer 启用 TLS，通道通过排序节点 mTLS Participation API 创建，无系统通道。Peer 关闭 Docker 链码构建后端并保留默认外部链码构建器，不挂载宿主 Docker socket。日常启停和容器重建保留三个账本卷及原证书。
+
+Java 链码采用 Chaincode as a Service（CaaS）方式：JDK21 构建、JRE21 运行，使用 fabric-chaincode-shim 2.5.11 的官方 ContractRouter。`deploy/fabric/chaincode.compose.yml` 与基础 Compose 合并运行同一份链码的两个实例，Org1 Peer 连接 `evidence-org1:9999`，Org2 Peer 连接 `evidence-org2:9999`；实例分别配置所属组织安装得到的包 ID。链码服务只在 Compose 内网监听，不映射宿主端口；这一段连接使用明文，仅用于本地开发验证。Peer/Orderer TLS 与 Participation API 的 mTLS 保持启用。[官方 CaaS 说明](https://hyperledger-fabric.readthedocs.io/en/release-2.5/cc_service.html)
+
+首版使用一个 Raft 排序节点及链码级静态背书策略 AND('Org1MSP.peer','Org2MSP.peer')，不增加状态级背书或多通道。背书策略与业务调用 ACL 分开：OrgB 发起登记，由两机构 Peer 对执行结果背书；OrgA Peer 参与背书不赋予 OrgA 调用者登记权限，也不代表委托方人员已人工复核。[官方测试网络结构](https://hyperledger-fabric.readthedocs.io/en/latest/test_network.html)
 
 ### 7.2 两个合约方法
 
 | 方法 | 校验 | 结果 |
 | --- | --- | --- |
-| RegisterEvidence(evidenceId, version, fileHash) | 调用者 MSP 为 Org2MSP；编号格式有效、版本为正整数、摘要为 64 位小写十六进制 | 键不存在则创建；同摘要返回原记录；不同摘要返回 EVIDENCE_HASH_CONFLICT |
-| QueryEvidence(evidenceId, version) | 调用者 MSP 为 Org1MSP 或 Org2MSP，参数格式有效 | 返回 found 与已登记记录；不存在返回 found=false，不假报已确认 |
+| RegisterEvidence(evidenceId, version, fileHash) | SUBMIT；先检查调用者 MSP 为 Org2MSP，再校验证据编号、版本及摘要 | 键不存在则创建；同摘要原样返回原记录且不写状态；不同摘要返回 EVIDENCE_HASH_CONFLICT |
+| QueryEvidence(evidenceId, version) | EVALUATE；先检查调用者 MSP 为 Org1MSP 或 Org2MSP，再校验证据编号和版本 | 找到时返回 found=true 及原记录对象；不存在返回 found=false、record=null |
 
-账本键使用 evidence 类型的复合键及 evidenceId、version。记录包含 evidenceId、version、fileHash、submitterMsp、registeredTxId；重复登记返回首次记录，不改首次交易编号。
+`evidenceId` 严格采用小写 UUID 的 `8-4-4-4-12` 十六进制格式。调用参数 `version` 为规范十进制字符串，范围为 1～2147483647，不接受前导零、正负号、空白、小数或指数形式；`fileHash` 为64个小写十六进制字符。
+
+账本键使用 evidence 类型的复合键及 evidenceId、version。记录通过 JSONStringer 按下列顺序生成，不依赖 Map 迭代顺序：
+
+| 字段顺序 | 字段 | JSON 类型及来源 |
+| --- | --- | --- |
+| 1 | evidenceId | string，已校验的证据编号 |
+| 2 | version | number，已校验的文件版本整数 |
+| 3 | fileHash | string，已校验的文件摘要 |
+| 4 | submitterMsp | string，来自 Context.getClientIdentity().getMSPID() |
+| 5 | registeredTxId | string，首次写入该键时的 stub.getTxId() |
+
+重复登记保留首次 registeredTxId；查询将原记录 JSON 嵌入 record 对象，不重复转义为字符串。文件 version 与链码部署版本、生命周期 sequence 分开管理。
+
+显式业务错误使用 ChaincodeException，UTF-8 payload 为错误码，消息采用固定文本且不回显输入：
+
+| 错误码 | 条件 |
+| --- | --- |
+| FORBIDDEN | 调用者 MSP 不具备当前操作权限 |
+| INVALID_EVIDENCE_ID | 证据编号不符合规范小写 UUID 格式 |
+| INVALID_VERSION | 文件版本格式错误、非正数或超出 int32 范围 |
+| INVALID_FILE_HASH | 摘要格式不是64位小写十六进制 |
+| EVIDENCE_HASH_CONFLICT | 同一证据编号和版本已登记不同摘要 |
+
+并发首次登记同一键时，多个提案可能均读到不存在；后提交的交易可能因 MVCC_READ_CONFLICT 无效。后端先确认原交易并查询业务键：已有同摘要记录时确认业务结果，不同摘要时报告冲突；明确原交易无效且仍无登记后，才重新背书创建新交易。RPC 超时保持未知态，不直接判失败。该提交验证结果与合约业务错误分开处理，细节见 [chaincode/README.md](../chaincode/README.md) 及第 8 节。
 
 链码不访问 MySQL、对象存储或外部 HTTP，不读取系统时钟或生成随机业务编号。OrgA 尝试登记必须由链码拒绝，不能只靠 Java 接口限制。文件内容、任务关联、复核和权限均不上链。
 
 ### 7.3 接入接口
 
-业务代码依赖 EvidenceLedgerClient，隔离 Fabric 具体调用：
+业务代码依赖已实现的 EvidenceLedgerClient，具体实现为 GatewayEvidenceLedgerClient。接口在背书、提交和确认之间显式返回可持久化检查点，调用方负责决定何时持久化和进入下一步：
 
 ```text
-prepareRegistration(evidenceId, version, sha256) -> txId + transactionBytes
-submitPrepared(transactionBytes) -> commitBytes
-queryCommit(commitBytes) -> valid / invalid / unknown
-queryEvidence(org, evidenceId, version) -> found + record
+PreparedRegistration prepareRegistration(String evidenceId, int version, String fileHash)
+CommitCheckpoint submitPrepared(PreparedRegistration prepared)
+CommitOutcome queryCommit(CommitCheckpoint checkpoint)
+EvidenceQuery queryEvidence(String evidenceId, int version)
 ```
+
+| 返回记录 | 字段及含义 |
+| --- | --- |
+| PreparedRegistration | transactionId、transactionBytes；已完成背书，尚未提交，字节数组防御性复制 |
+| CommitCheckpoint | transactionId、commitBytes；submitAsync 返回的确认请求检查点，不代表有效 commit |
+| CommitOutcome | transactionId、valid、validationCode、blockNumber；validationCode 为 Fabric 验证码数值，VALID 为 0 |
+| EvidenceRecord | evidenceId、version、fileHash、submitterMsp、registeredTxId；对应第 7.2 节五字段 |
+| EvidenceQuery | found、record；不存在时 found=false 且 record=null |
+
+每个 client 实例绑定一个机构身份、通道和合约。queryEvidence 不接受机构参数，OrgA/OrgB 查询通过各自实例执行；业务层按第 3.4 节规则选择实例。prepareRegistration、submitPrepared、queryCommit、queryEvidence 分别保留 SDK 的 EndorseException、SubmitException、CommitStatusException、GatewayException。确认请求获得明确验证结果时才返回 CommitOutcome；RPC 异常继续向上传递，由业务处理器持久化 UNKNOWN，不能将异常折算为 valid=false。
+
+连接仅由显式调用 GatewayEvidenceLedgerClient.connect 建立，默认 Spring Boot 启动不读取链身份证书、不自动连接 Fabric。T006 探针位于测试源码，按 prepare、submit、confirm、verify 启动四个独立 JVM：先背书保存 transactionBytes，下一进程恢复同一 txId 提交并保存 commitBytes，再由新进程恢复确认请求并核对双方查询，最后验证重新查询、同摘要新交易幂等、摘要冲突及 OrgA 登记拒绝。检查点采用权限 0600 的文件和原子替换，报告只记录路径、长度、SHA-256、进程编号及安全结果，不输出私钥或序列化字节正文。
+
+Gateway Java 1.13.0 的错误详情不保留 ChaincodeException.payload 业务码。T006 对预期业务拒绝同时校验 EndorseException、gRPC ABORTED、非空 ErrorDetail，以及已知 Peer 的 MSP、地址和以下完整固定消息，再将消息映射为业务码；该映射不是从 SDK 读取 payload：
+
+| ErrorDetail.message 完整消息 | 映射业务码 |
+| --- | --- |
+| chaincode response 500, A different file hash is already registered for this evidence version. | EVIDENCE_HASH_CONFLICT |
+| chaincode response 500, The calling organization is not permitted to perform this operation. | FORBIDDEN |
+
+单独出现 ABORTED、空详情或其他消息不能判为上述业务拒绝，应保留原 SDK 异常供后续处理。链码自身的 payload 约定仍按第 7.2 节定义，不能假定不同客户端都会透传它。
+
+2026-10-20，JDK 21、Gateway 1.13.0、gRPC 1.84.0、Protobuf 4.36.2 组合已通过上述真实验证，32 项后端测试通过，M1 的技术验证条件已满足。本轮报告位于 `.local/fabric/gateway-probe/20261020T030326Z-cb3d70ca/verification.json`。T006 证明了 SDK API、同身份下的文件检查点跨进程恢复及双机构链调用；数据库检查点、Outbox 和响应丢失后的业务恢复分别留待 T012、T024、T027 实现或验证，不能据此声称已经完成。
 
 这些是 Java 内部适配方法，链上业务仍然只有两个。Gateway 提供拆分的背书、提交、提交状态确认流程，不能把异步提交返回当作有效提交。[官方 Gateway 流程](https://hyperledger-fabric.readthedocs.io/en/latest/gateway.html)
 
@@ -330,7 +383,11 @@ RabbitMQ 的发布确认与消费确认分别覆盖不同环节，二者都不�
 
 若已有未完成的 chain_attempt，执行第 8.3 节恢复流程，不因为一次业务查询返回不存在就重新准备交易。写 SUBMITTING 检查点及后续结果时必须校验处理租约；失去租约后不再发起新的提交操作。
 
-transactionBytes 在提交前由 Transaction.getBytes() 保存，txId 用 getTransactionId() 取得；commitBytes 在 submitAsync 返回后保存，可用 Gateway.newCommit(bytes) 恢复确认查询。只有 txId 并不足以直接调用 newCommit。[Transaction API](https://hyperledger.github.io/fabric-gateway/main/api/java/org/hyperledger/fabric/client/Transaction.html)、[Gateway API](https://hyperledger.github.io/fabric-gateway/main/api/java/org/hyperledger/fabric/client/Gateway.html)
+transactionBytes 在提交前由 Transaction.getBytes() 保存，txId 用 getTransactionId() 取得；恢复时使用 Gateway.newTransaction(transactionBytes)，必须保留原 txId。commitBytes 在 submitAsync 返回后由提交对象的 getBytes() 保存，可用 Gateway.newCommit(commitBytes) 恢复确认查询。仅有 txId 不足以恢复 newCommit 所需的请求，必须同时保存 commitBytes。[Transaction API](https://hyperledger.github.io/fabric-gateway/main/api/java/org/hyperledger/fabric/client/Transaction.html)、[Gateway API](https://hyperledger.github.io/fabric-gateway/main/api/java/org/hyperledger/fabric/client/Gateway.html)
+
+getBytes() 保存的检查点通常尚未包含客户端对交易或确认请求的签名；恢复后由 Gateway 配置的 signer 补签。因此必须使用原机构、同一客户端证书及与该证书匹配的私钥恢复，不能仅因 MSP 相同就替换为该机构其他身份。已实现的 CheckpointValidator 在恢复 transactionBytes 前校验 creator 的 MSP/证书、channel、外部及内部 transactionId、chaincode；在恢复 commitBytes 前校验请求身份、channel 和 transactionId。确认请求本身不包含 chaincode 字段，不对其声称存在该项校验。校验不通过直接拒绝恢复，不向网络提交或查询。
+
+以上序列化、校验和同身份跨进程调用已由 T006 验证；本节 chain_attempt/chain_submission 的数据库事务、租约和自动恢复顺序仍为后续 T012、T024、T027 的实施与故障验证要求。
 
 ### 8.3 UNKNOWN 与失败重试
 

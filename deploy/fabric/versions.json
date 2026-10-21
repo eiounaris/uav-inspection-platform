@@ -1,0 +1,10 @@
+{
+  "fabric_version": "2.5.16",
+  "platform": "linux-amd64",
+  "channel": "mychannel",
+  "samples_commit": "5789681b4f4d24e58fa40f19a69f5496892374b6",
+  "binary_archive": "hyperledger-fabric-linux-amd64-2.5.16.tar.gz",
+  "binary_sha256": "18c91e7f2f11b601e6622cc70454d568af897707ee9adf111e9fa91a233881bf",
+  "samples_archive": "fabric-samples-5789681.tar.gz",
+  "samples_sha256": "476b2038a518c2e8fedf234ada62ef86db5d151549e8a5e858705e811773b600"
+}
