@@ -1,0 +1,20 @@
+inspection:
+  messaging:
+    host: ${RABBITMQ_HOST:127.0.0.1}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:uav_app}
+    password: ${RABBITMQ_PASSWORD}
+    virtual-host: ${RABBITMQ_VIRTUAL_HOST:/}
+    exchange: ${MESSAGING_EXCHANGE:inspection.events}
+    finalize-queue: ${MESSAGING_FINALIZE_QUEUE:inspection.file.finalize}
+    anchor-queue: ${MESSAGING_ANCHOR_QUEUE:inspection.evidence.anchor}
+    dead-letter-exchange: ${MESSAGING_DEAD_LETTER_EXCHANGE:inspection.dead.events}
+    dead-letter-queue: ${MESSAGING_DEAD_LETTER_QUEUE:inspection.dead}
+    publish-delay-ms: ${MESSAGING_PUBLISH_DELAY_MS:1000}
+    recovery-delay-ms: ${MESSAGING_RECOVERY_DELAY_MS:10000}
+    publisher-enabled: true
+    recovery-enabled: true
+logging:
+  level:
+    org.springframework.amqp: WARN
+    com.rabbitmq.client: WARN

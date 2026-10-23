@@ -3,11 +3,16 @@ spring:
     name: uav-inspection-backend
   profiles:
     default: local
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
   jackson:
     time-zone: UTC
     datatype:
       datetime:
         write-dates-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: true
   web:
     error:
       include-message: never
@@ -20,3 +25,16 @@ server:
 logging:
   pattern:
     level: "%5p [traceId=%X{traceId:-}]"
+
+---
+# HTTP and Gateway-only runs remain independent of MySQL.
+spring:
+  config:
+    activate:
+      on-profile: "!database"
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration
+      - org.mybatis.spring.boot.autoconfigure.MybatisAutoConfiguration

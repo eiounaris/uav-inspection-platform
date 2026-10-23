@@ -3,6 +3,7 @@ package com.uav.inspection.common.error;
 import com.uav.inspection.common.api.ApiResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
+import org.springframework.web.multipart.MultipartException;
 
 import java.util.List;
 
@@ -23,9 +25,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(BusinessException.class)
     ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException exception) {
         ErrorCode error = exception.errorCode();
-        return ResponseEntity.status(error.status())
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(ApiResponse.error(error.name(), error.message(), null));
+        var response = ResponseEntity.status(error.status()).contentType(MediaType.APPLICATION_JSON);
+        if (error == ErrorCode.UNAUTHORIZED) {
+            response.header(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
+        }
+        return response.body(ApiResponse.error(error.name(), error.message(), null));
     }
 
     @ExceptionHandler(Exception.class)
@@ -35,6 +39,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(error.status())
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(ApiResponse.error(error.name(), error.message(), null));
+    }
+
+    @ExceptionHandler(DataAccessException.class)
+    ResponseEntity<ApiResponse<Void>> handleDatabaseException(DataAccessException exception) {
+        // SQL diagnostics may include credential hashes or bound values. Keep only a safe type name.
+        log.error("Database request failed ({})", exception.getClass().getSimpleName());
+        ErrorCode error = ErrorCode.DEPENDENCY_UNAVAILABLE;
+        return ResponseEntity.status(error.status())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResponse.error(error.name(), error.message(), null));
+    }
+
+    @ExceptionHandler(MultipartException.class)
+    ResponseEntity<ApiResponse<Void>> handleMalformedMultipart(MultipartException exception) {
+        return handleBusinessException(new BusinessException(ErrorCode.INVALID_ARGUMENT));
     }
 
     @Override

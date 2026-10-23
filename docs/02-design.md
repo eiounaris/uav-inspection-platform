@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 | --- | --- |
 | 目标版本 | MVP（首版可演示版本） |
-| 更新日期 | 2026-10-20 |
+| 更新日期 | 2026-10-23 |
 | 需求依据 | [01-requirements.md](01-requirements.md) |
 | 架构 | Spring Boot 模块化单体，数据库作为业务状态的权威来源 |
 | Fabric 范围 | 两个业务组织、一个通道、一份链码、两个业务操作 |
@@ -21,11 +21,11 @@
 | 项目 | 选型及约束 |
 | --- | --- |
 | 业务运行时 | JDK 21、Maven |
-| Web 与认证 | Spring Boot 4.1.1（T002 已构建验证）；Spring Security 在 T008 接入，由 Boot 管理版本 |
-| 持久层 | MyBatis Spring Boot Starter 4.0.x、MySQL 8.4、Flyway 版本化迁移 |
+| Web 与认证 | Spring Boot 4.1.1、Spring Security 7.1.1；T008 使用 Nimbus HS256 JWT、BCrypt 及每请求数据库身份校验，由 Boot 管理版本 |
+| 持久层 | MyBatis Spring Boot Starter 4.0.0、Flyway 12.4.0、MySQL Connector/J 9.7.0、MySQL 8.4.11；T007 空库迁移、重复初始化及真实约束验证已通过 |
 | 缓存 | Redis，设备在线状态加速；不可作为唯一的业务持久化来源 |
-| 文件 | S3 兼容私有对象存储，通过适配接口接入；T003 本地实现固定 Garage 2.4.1，采用私有桶和路径式地址 |
-| 消息 | RabbitMQ，持久化队列、持久化消息、发布确认及手动消费确认 |
+| 文件 | Garage 2.4.1 私有桶；T010 使用 AWS SDK Java 2.56.0 的同步 S3 适配，路径式地址及可重读文件请求体 |
+| 消息 | RabbitMQ 4.2.9、Spring AMQP 4.1.1（由 Boot 管理）；持久化消息、发布确认、mandatory 返回检查及手动 ACK |
 | 区块链 | Fabric 2.5.16 开发网络（T004 已验证）；Java Gateway 双机构调用及文件检查点跨进程恢复在 T006 已验证 |
 | Java 链接入 | JDK 21、Fabric Gateway 1.13.0、gRPC 1.84.0、Protobuf 4.36.2；2026-10-20 已通过真实网络调用 |
 | 链码运行时 | JDK21、独立 Maven 模块、fabric-chaincode-shim 2.5.11；官方 ContractRouter CaaS 两组织各一实例，Peer 不挂载宿主 Docker socket |
@@ -83,6 +83,13 @@ deploy/            开发环境配置与脚本
 - JWT 保存用户标识和 tokenVersion，不接受客户端指定机构或角色。每次请求读取数据库中的账号状态、机构、角色和 tokenVersion，停用、退出或角色变更后可使旧令牌失效。
 - 预置两个机构、必要测试用户和角色；机构管理员只能管理本机构用户及适用角色，不能直接获得全部任务资料权限。
 - 角色代码固定为 ORG_ADMIN、OWNER_TASK_ADMIN、OWNER_REVIEWER、OWNER_DATA_APPROVER、OPERATOR_TASK_ADMIN、OPERATOR_USER。获授权访问是资源授权，不是额外全局角色。
+- OrgA 可分配 ORG_ADMIN 和三个 OWNER_* 角色；OrgB 可分配 ORG_ADMIN、OPERATOR_TASK_ADMIN、OPERATOR_USER。数据库限制角色集合及机构白名单；T008 的角色修改接口在事务内锁定调用者与目标账号后重新校验权限、令牌版本及机构。
+
+T008 使用 Spring Security Resource Server 与 Nimbus 实现 JWT。JWT_SECRET 必须是 64 位小写十六进制，解码为 32 字节 HS256 密钥；本地初始化脚本只生成一次，启动器读取原值。令牌除标准 iss/aud/iat/exp 外只保存 sub、tokenVersion，不保存密码、机构或角色。签发固定 issuer=uav-inspection、audience=uav-inspection-api、typ=JWT，有效期 30 分钟；校验锁定 HS256，拒绝缺失声明、非整数或负版本、未来签发时间及超过 30 分钟的有效期，时钟偏差容忍为 0，到期时刻立即失效。
+
+登录只接受 username/password，错误密码、不存在或停用账号统一 401；密码按 UTF-8 字节限制为 72，超过限制返回 400。角色请求只接受 roles/expectedLockVersion；未知字段、空/重复/未知角色或机构不适用角色返回 400。无管理员权限、跨机构或不可管理目标统一 403，版本冲突返回 409。更新成功同时递增目标账号 token_version 和 lock_version；角色与权限始终以数据库当前值为准。退出仅按本次请求的原 tokenVersion 条件更新，递增两个版本，使该版本的所有令牌失效；延迟退出不会撤销后来签发的新版本令牌。
+
+认证过滤器与业务控制器都使用统一错误结构及 traceId。账号数据库不可用返回 503 并拒绝业务访问；401 携带固定 WWW-Authenticate: Bearer，不回传 JWT 校验原文。未启用 database 的独立 HTTP/Gateway 模式只提供基础能力，业务控制器不注册；启用 database 后除状态与登录入口外请求均需认证。T009 已接入任务成员权限；文件版本及共享权限随对应业务任务扩展。
 
 ### 3.2 两条资源访问路径
 
@@ -90,6 +97,8 @@ deploy/            开发环境配置与脚本
 2. **共享路径**：账号有效，存在面向该用户、该文件版本、当前时间有效且未撤销的授权；只开放指定版本的查看、下载和核验，不开放整个任务及其他版本。
 
 统一 ResourcePermissionService 执行以上判断。列表查询在 SQL 中按任务成员或授权过滤，分页前完成过滤；详情、预览、下载、核验再次检查同一规则。
+
+T009 已实现任务路径：创建者必须为 OrgA 的 OWNER_TASK_ADMIN；读任务需有本机构适用业务角色和显式成员关系，ORG_ADMIN 单独不能读取任务。修改前锁定任务、重读并锁定当前账号，重新校验 enabled、tokenVersion、机构、业务角色和成员关系。MyBatis 使用 STATEMENT 缓存范围，避免同一事务的权限重查复用旧行。无权限和不存在的任务/子任务统一返回 403；有业务角色但没有成员关系的用户列表为空，ORG_ADMIN-only 列表返回 403。共享路径和文件接口在后续任务接入。
 
 创建任务时将创建人加入任务成员。委托方管理员指派本机构复核、审批成员，通过任务分配操作加入运营商任务管理员；运营商管理员可指派本机构操作人员，不能添加委托方成员或更改委托方验收要求。成员维护接口只替换调用者有权管理的本机构成员，必须保留其他机构成员和任务创建人，不能将 userIds 解释为整个任务的全量成员替换。
 
@@ -118,6 +127,7 @@ Gateway 按机构配置并复用连接，机构证书和私钥分别挂载。服
 
 - 业务主键使用服务端生成的 UUID 字符串；证据编号独立于文件名和对象路径。
 - MySQL 使用 InnoDB、utf8mb4；时间以 UTC 写入 DATETIME(3)，接口使用带 Z 的 ISO 8601，界面按 Asia/Shanghai 显示。
+- database 配置固定连接时区为 +00:00，并将其应用到 MySQL 会话；Hikari 使用 READ COMMITTED。UtcInstantTypeHandler 为 Instant 的 JDBC 读写显式传入独立 UTC Calendar，避免依赖 JVM 默认时区；DATETIME 本身不携带时区。
 - SHA-256 使用 64 位小写十六进制字符串；文件长度用 BIGINT，业务版本号用正整数。
 - 可变业务行包含 lock_version，用于条件更新；它与文件 version_no 含义不同。
 - 外键及唯一约束在迁移脚本中定义，历史业务不级联删除；文件路径、对象键只由后端生成。
@@ -128,40 +138,104 @@ Gateway 按机构配置并复用连接，机构证书和私钥分别挂载。服
 | 表 | 关键字段 | 约束或用途 |
 | --- | --- | --- |
 | organization | id、code、name、msp_id | code、msp_id 唯一，预置 OrgA/OrgB |
-| app_user | id、org_id、username、password_hash、roles、enabled、token_version | username 唯一；roles 为固定枚举数组，不能自行创建角色 |
+| app_user | id、org_id、username、password_hash、roles、enabled、token_version、lock_version | username 全局唯一且大小写敏感；roles 为固定枚举数组，不能自行创建角色 |
 | inspection_task | id、owner_org_id、operator_org_id、name、scope、status、created_by、lock_version、completed_at | owner 固定为 OrgA，operator 固定为 OrgB |
 | task_member | task_id、user_id | 联合唯一；业务层检查机构及角色 |
 | inspection_subtask | id、task_id、name、current_execution_id、lock_version | 首次分配前 current_execution_id 可空，分配后指向本子任务当前批次 |
 | material_requirement | id、evidence_id、task_id、subtask_id、name、required、next_version_no | evidence_id 唯一；启动前 subtask_id 可空，启动时必须绑定同任务子任务；next_version_no 在定版事务中递增 |
-| drone | id、operator_org_id、code、token_hash、enabled、last_seen_at | code 唯一；归属 OrgB |
+| drone | id、operator_org_id、code、token_hash、enabled、last_seen_at、lock_version | code 唯一；归属 OrgB |
 | task_execution | id、subtask_id、drone_id、status、started_at、closed_at、progress | 批次不可复用；状态 READY/RUNNING/CLOSED |
 | device_event | id、drone_id、boot_id、seq、execution_id、event_type、received_at | 唯一 (drone_id, boot_id, seq)，防止重复计数 |
 
 委托方创建草稿任务及必交要求；运营商在已分配阶段拆分子任务并绑定资料项。必交项的内容由委托方维护，运营商不能删除或降低要求。开始执行前检查所有资料项已绑定子任务，之后冻结资料要求，首版不提供执行中修改验收清单的流程。
 
+#### 4.2.1 T007 首版迁移边界
+
+`V1__identity_and_task_scope.sql` 仅建立 organization、app_user、inspection_task、task_member、drone 五张表。T007 已于 2026-10-21 完成真实 MySQL 验证；V1 已应用，后续增加表或调整 DDL 必须追加新版本迁移，不回改 V1 或已有校验和。
+
+- 主键和外键 UUID 字段采用 CHAR(36)、ascii_bin；表默认 utf8mb4_0900_ai_ci。OrgA/OrgB 的公开固定编号分别为 `00000000-0000-4000-8000-000000000001`、`00000000-0000-4000-8000-000000000002`。迁移建立这两条基础机构记录，CHECK 固定编号、code 与 MSP 的映射，code 和 msp_id 分别唯一。
+- username 使用 utf8mb4_0900_as_cs，全局唯一且区分大小写。password_hash 只接受长度 60 的 BCrypt 格式；演示初始化使用 cost=12，不保存明文密码。roles 使用非空 JSON 字符串数组，JSON_SCHEMA_VALID 限定六个固定枚举并禁止重复，JSON_CONTAINS 配合固定机构编号限制各机构角色白名单。
+- inspection_task 的 owner 固定 OrgA、operator 固定 OrgB，默认 DRAFT；数据库限定五种任务状态，并要求仅 COMPLETED 具有 completed_at。`(created_by, owner_org_id)` 复合外键引用 app_user 的 `(id, org_id)`，保证创建人属于委托方；任务操作权限和状态流转由 T009 等后续服务实现。
+- task_member 使用 `(task_id, user_id)` 联合主键，补充 `(user_id, task_id)` 反向索引；用户机构、任务机构/状态及设备机构/启用状态有相应索引。外键均采用 RESTRICT，不级联删除历史引用。
+- drone 固定归属 OrgB，code 唯一，token_hash 限定 64 位小写十六进制。enabled 限定 0/1；用户、任务和设备的 lock_version 及用户 token_version 均非负。时间字段采用 DATETIME(3)，可变记录包含创建及更新时间。
+
+首版迁移不插入账号、设备、任务或任务成员。演示账号和首条链路所需设备由第 10 节的显式初始化提供，不提前实现登录、角色管理、任务流转或设备业务接口。
+
+本轮采用三个独立进程执行 migrate、seed、verify，报告位于 `.local/database-probe/20261021T020400Z-0600c978/`。迁移阶段为两个机构、零用户、零设备；演示初始化后为六个用户、一台设备，任务及成员始终为空。重复启动后 Flyway 仍只有一条成功 V1 记录，迁移校验和、原始凭据文件及五表完整快照均保持一致；seed/verify 的快照 SHA-256 为 `d870185664ccb78f71abaace3865d50ce6b9941190a7fce7fa798b0f1b5fabec`。
+
+verify 已实际验证 24 项唯一键、角色及机构白名单、外键、摘要格式和版本约束；探针写入全部回滚。在 JVM 时区 Asia/Shanghai 下，`2026-10-21T00:00:00.123Z` 经 UTC handler 写入并读回完全一致，SQL NULL 也保留；实际连接会话为 +00:00 和 READ-COMMITTED。后端原有 32 项常规测试回归通过。这些结果证明迁移、初始化和持久层边界，未将后续认证、任务或设备 HTTP 功能计为已完成。
+
+#### 4.2.2 T008 身份审计迁移
+
+T008 追加 `V2__identity_audit.sql` 建立 audit_log，保留已应用的 V1 及其 checksum=-539134757。审计记录包含操作者、机构、动作、资源编号、traceId、结果及 UTC 时间；actor_id/resource_id 为多态编号，不建立到 app_user 的外键，org_id 保留机构外键。应用 Mapper 只暴露 INSERT，查询接口由 T021 实现。
+
+登录成功、实际生效的退出及角色修改分别记录 AUTH_LOGIN、AUTH_LOGOUT、USER_ROLES_CHANGED。角色更新和退出的审计与版本更新处于同一数据库事务，失败回滚不会留下成功审计。只记录安全元数据，不保存密码、BCrypt 摘要、JWT、请求正文或完整响应。应用日志关闭认证请求和响应的 HTTP 诊断输出；数据库异常仅记录类型。该设计不声称数据库管理员无法修改审计记录。
+
+#### 4.2.3 T009 任务、资料项及初始批次
+
+T009 追加 `V3__task_execution_scope.sql` 建立 inspection_subtask、material_requirement、task_execution，保留 V1/V2。资料项的 `(subtask_id, task_id)` 复合外键保证子任务属于同一任务；子任务的 `(current_execution_id, id)` 复合外键保证当前批次属于自身。执行表生成列 active_subtask_id 仅对 READY/RUNNING 取子任务编号，唯一约束限制每个子任务最多一个活跃批次，CLOSED 历史可保留多条。批次状态、开始/关闭时间、0～100 进度和正版本号由 CHECK 约束，历史关联使用 RESTRICT。
+
+任务创建可先保存空资料清单的 DRAFT，并自动添加创建人为成员。委托方在 DRAFT/ASSIGNED 阶段整批维护资料要求：已有项携带 id，保留 evidenceId 和绑定；新项不传 id，由服务生成两个独立 UUID；未绑定项可移除，删除已绑定项返回 409。运营商只绑定资料项，不能修改其内容或必交属性。每次维护递增任务版本，已有项同时递增自身版本。
+
+分配运营商时，委托方任务成员中的 OWNER_TASK_ADMIN 校验 OrgB 及已启用的 OPERATOR_TASK_ADMIN，加入该管理员并将 DRAFT 改为 ASSIGNED。成员维护只替换调用者本机构的适用业务角色成员，拒绝跨机构、停用或无适用角色目标；省略创建人仍保留，另一机构成员不受影响。运营商管理员需已是任务成员，才能细化子任务、分配设备或启动任务。
+
+任务及子任务的关键写入使用 expectedLockVersion；分配设备使用子任务版本，其他写入使用任务版本。子任务创建、成员/要求变更、初次分配设备和启动均递增任务版本；初次设备分配还递增子任务版本。第一次分配只在 ASSIGNED 阶段建立 READY 批次，已有当前批次时返回 409。启动先锁任务、子任务、资料项和批次，再按设备编号去重排序获取行锁并重查启用状态，最后将原 READY 批次改为 RUNNING 并设置同一个 UTC startedAt，不创建新编号；任务、子任务和执行版本递增。
+
+任务及子任务路径编号、成员/运营商管理员/设备/资料编号使用规范的小写 UUID；格式不合法返回 400，合法但无权限或不存在的任务资源仍统一返回 403。创建请求不接受客户端提供机构、创建者、状态、资料证据编号或批次编号。
+
+七种成功写入分别记录 TASK_CREATED、TASK_REQUIREMENTS_UPDATED、TASK_ASSIGNED、TASK_MEMBERS_UPDATED、SUBTASK_CREATED、EXECUTION_CREATED、TASK_STARTED，与业务变更同事务。T009 仅实现到 RUNNING，换机、进度、上传及任务验收仍在后续任务；不将任务启动计为成果完成。
+
 ### 4.3 文件、复核与共享表
 
 | 表 | 关键字段 | 约束或用途 |
 | --- | --- | --- |
-| upload_session | id、task_id、requirement_id、execution_id、actor_type、actor_id、client_request_id、request_hash、filename、expected_size、part_size、part_count、status、expires_at、lease_token、lease_until、retry_count、next_action_at、last_error | 唯一 (actor_type, actor_id, client_request_id)，相同请求内容才可复用 |
+| upload_session | id、task_id、subtask_id、requirement_id、evidence_id、execution_id、actor_type、actor_id、client_request_id、request_hash、filename、content_type、expected_size、part_size、part_count、status、expires_at、lease_token、lease_until、retry_count、next_action_at、last_error、lock_version | 唯一 (actor_type, actor_id, client_request_id)，相同请求内容才可复用 |
 | upload_part | session_id、part_no、size、sha256、object_key | 唯一 (session_id, part_no)，一个分片只接纳一种内容 |
 | evidence_version | id、requirement_id、evidence_id、version_no、execution_id、upload_session_id、uploader_user_id、uploader_drone_id、submitter_org_id、object_key、size、sha256、review_status、created_at | 唯一 (evidence_id, version_no)、upload_session_id；出生即为校验完成的固定版本 |
 | issue | id、task_id、evidence_version_id、description、created_by、created_at | 异常关联具体版本，不修改原文件 |
 | review_record | id、evidence_version_id、decision、reason、reviewer_id、created_at | evidence_version_id 唯一；一版只形成一次正式复核结论 |
 | access_grant | id、version_id、applicant_id、client_request_id、request_hash、status、reason、requested_valid_until、approver_id、valid_until、revoked_at、lock_version | 唯一 (applicant_id, client_request_id)；同键不同请求拒绝；一条记录承载申请与获批授权 |
-| verification_record | id、version_id、user_id、source、actual_sha256、ledger_sha256、result、reason、verified_at | source 为 STORED/COPY；副本不产生证据版本 |
+| verification_record | id、version_id、user_id、source、actual_sha256、ledger_sha256、actual_size、ledger_tx_id、result、reason、verified_at | source 为 STORED/COPY；副本不产生证据版本 |
 | audit_log | id、actor_type、actor_id、org_id、action、resource_type、resource_id、trace_id、result、created_at | 追加记录，不记录密码、令牌、私钥或完整下载地址 |
 
 文件处理状态由 upload_session 表示；evidence_version 只保存已经就绪的版本，后文 READY 指这一就绪语义，不重复保存处理状态。review_status 初始为 PENDING；原始文件摘要、对象键和版本号不再修改。
 
 当前验收版本采用数据库查询，首版不增加“最新版本指针”表：按资料项与子任务 current_execution_id 过滤，取最大 version_no。版本号按定版成功顺序分配，不使用设备时间或上传开始时间排序。
 
+#### 4.3.1 T010 上传会话与私有分片边界
+
+T010 追加 V4__upload_sessions_and_versions.sql 建立 upload_session、upload_part、evidence_version，保留 V1～V3。会话固定资料项、证据编号、任务/子任务与执行批次，复合外键限制关联属于同一范围；分片以 (session_id, part_no) 为主键，object_key 全局唯一。evidence_version 仅预建结构，T010 不插入正式文件版本。会话分片几何、摘要格式、租约字段成对及到期时间等由数据库约束，分片实际长度与所属会话规格由事务内服务检查。
+
+上传 API 同时启用 database、storage profiles。启动器读取既有 S3_*、UPLOAD_* 参数；database-only 的认证、任务及数据库探针保持独立。S3 使用静态凭据、显式 endpoint/region、路径式访问，不调用建桶或公开 ACL。Garage 配置禁用 SDK 分块编码，校验和策略为 WHEN_REQUIRED，业务 SHA-256 独立计算，不把 ETag 当作文件摘要。允许类型、文件上限、分片大小、24 小时会话期及私有临时目录可配置；分片至少 8 字节、会话期最多 7 天，最大文件对应分片数不超过 10000。
+
+用户上传要求 OrgB、OPERATOR_USER、显式任务成员及会话所有者同时成立，OPERATOR_TASK_ADMIN 单独不能代替操作员权限。创建新会话只接受当前 RUNNING 批次及 RUNNING/WAITING_ACCEPTANCE 任务；完成任务禁止写入。设备身份和旧批次历史补传由 T015/T016 接入。GET 及同请求重试仍检查当前身份、任务权限和所有者，可以查看过期/冻结会话；同键不延长原 expiresAt。
+
+创建请求固定 clientRequestId、requirementId、executionId、filename、contentType 和 size。clientRequestId 为客户端生成并在重试间保持的规范 UUID；请求摘要对其余字段使用长度前缀编码后计算 SHA-256。文件名仅作元数据，拒绝路径分隔符与控制字符；扩展名须与声明 MIME 一致。相同用户及请求编号、相同内容返回原会话，不同内容返回 IDEMPOTENCY_CONFLICT/409。
+
+分片编号从 1 开始，PUT 正文为 application/octet-stream。UploadService 在事务外流式接收至 0600 随机临时文件、限制精确长度并计算 SHA-256；短内容 400，超长 413。首片校验 PNG/JPEG/PDF/MP4 的文件头与会话声明；这是特征检查，完整文件验证在定版阶段实现。SHA-256 计算后再用可重读文件请求体写对象，SDK 重试不重复计入业务摘要。
+
+预检和最终登记均由独立 UploadTransactions Bean 的短事务执行，统一先锁任务、重读并锁定账号，再锁子任务/资料/执行和会话。写对象期间不持有数据库事务。最终登记重新校验权限、所有者、任务/批次、状态、数据库时间期限及已有分片：同片同摘要幂等返回，不同内容 PART_CONTENT_CONFLICT/409；新分片、会话版本递增与 UPLOAD_PART_STORED 审计同事务，创建记录 UPLOAD_SESSION_CREATED。
+
+每次对象写入使用 upload-parts/{uploadId}/{partNo}/{attemptId}。只有事务正常返回且确认本次键未被采用时，才清理本次竞争失败的对象。登记或提交异常可能已提交引用，不能盲删候选对象；未引用尝试的保留期回收在 T025 实现。临时文件在 finally 清理。业务响应不包含对象键、存储凭据或下载地址，分片全部到齐后仍为 UPLOADING、versionId=null；完成接口、定版和 Outbox 由 T011 接入。
+
+#### 4.3.2 T011 异步定版边界
+
+同时启用 database、storage、messaging 时，新增 POST /api/v1/upload-sessions/{id}/complete。事务先按既有顺序锁定任务、当前账号及上传范围，校验会话所有者；首次完成还检查任务/当前执行、数据库时间期限及全部连续分片的准确长度。缺片返回 UPLOAD_PARTS_INCOMPLETE/409；通过后将会话冻结为 VERIFYING，与 FILE_FINALIZE_REQUESTED Outbox、审计一起提交。接口返回 202 及进度；重复完成仍检查权限并返回同一会话，不生成额外事件。最终完成后，GET 进度及重复完成返回原 versionId。
+
+FinalizationProcessor 的领取、检查点和完成由独立事务 Bean 执行。领取使用数据库时间及 120 秒处理租约；流式读取对象、合并、摘要计算、格式检查及最终对象写入均在事务外。按 partNo 顺序回读每片，重新核对实际大小与 SHA-256，再计算完整文件大小及摘要。临时文件权限 0600，使用固定缓冲；写对象前完成本地业务摘要，不受 SDK 重试影响。
+
+PNG 检查完整块边界、CRC、IEND，并解码；JPEG 检查段及结束标记并解码。解码限制为最多 2500 万像素以约束内存。PDF 检查头、尾、startxref 与引用位置；MP4 检查完整顶层 box 边界及 ftyp/moov/mdat、moov 内部基本结构。PDF/MP4 为容器结构检查，不等同于完整文档渲染或视频解码。内容或摘要错误转 FAILED；临时存储、文件 I/O 或本地空间不足保持 VERIFYING，保存安全错误码、退避时间和恢复责任。
+
+最终对象键为 evidence-files/{uploadId}/{leaseToken}。完成事务重新锁定任务及资料范围、检查租约 token 和数据库有效期，从 material_requirement.next_version_no 分配版本号；正式版本、next_version_no 递增、PENDING chain_submission、EVIDENCE_ANCHOR_REQUESTED、COMPLETED 上传及审计原子提交。上链事件的 bizId 是 chain_submission.id。当前批次的新版本会使 WAITING_ACCEPTANCE 回到 RUNNING；任务完成后不再新增正式版本。
+
+临时失败的检查点与 consumed_event.DONE 一起提交后才允许 ACK。独立恢复扫描默认每 10 秒查找已到期计划及失效租约，重新调用同一处理器，并绕过消费 DONE 检查；DONE 不会使业务恢复停止。完整续租、上传/存证统一扫描和跨进程故障矩阵仍由 T023/T027 完善。数据库提交结果不明或租约失效时保留最终候选对象，T025 再按引用回收。
+
 ### 4.4 存证与消息表
 
 | 表 | 关键字段 | 约束或用途 |
 | --- | --- | --- |
 | chain_submission | id、version_id、status、confirmed_tx_id、confirmed_by、retryable、retry_count、next_action_at、lease_token、lease_until、last_error | version_id 唯一；业务存证状态唯一来源 |
-| chain_attempt | id、submission_id、attempt_no、tx_id、phase、transaction_bytes、commit_bytes、validation_code、created_at、updated_at | tx_id 唯一，(submission_id, attempt_no) 唯一；保留各次尝试 |
+| chain_attempt | id、submission_id、attempt_no、tx_id、phase、transaction_bytes、commit_bytes、validation_code、block_number、last_error、created_at、updated_at | tx_id 唯一，(submission_id, attempt_no) 唯一；保留各次尝试 |
 | outbox_event | event_id、event_type、biz_id、dispatch_no、payload、status、next_send_at、lease_token、lease_until、sent_at、last_error | event_id 主键；唯一 (event_type, biz_id, dispatch_no) |
 | consumed_event | consumer_code、event_id、status、updated_at | 联合主键，状态 PROCESSING/DONE；与业务检查点一起提交 |
 
@@ -276,6 +350,20 @@ MySQL 业务事务使用 READ COMMITTED。影响任务验收的操作统一先�
 
 核验失败原因与内容不一致分别处理。本地状态仍待确认而链查询已取得有效记录时，可据实际摘要返回 MATCH/MISMATCH，本地存证状态由对账程序补齐；查询未发现记录不代表交易明确失败。副本太大或类型不允许属于输入错误，先拒绝请求。核验结果查询本身也需执行版本权限检查。
 
+#### 6.5.1 T013 实现边界
+
+核验及历史接口在 database、storage、ledger profiles 下启用。POST /evidence-versions/{id}/verifications?source=STORED 无正文；source=COPY 使用 multipart/form-data 且仅接受一个名为 file 的文件部分。source 在查询串中只出现一次；不接受正文里的 source 覆盖它。GET 同路径使用 page/pageSize 返回核验历史，默认 1/20，pageSize 上限 100。
+
+Controller 先按当前账号、业务角色和任务成员身份检查版本权限，再触发懒解析 multipart。Servlet 文件上限跟随核验配置，请求上限为文件上限加 1 MiB，文件直接暂存到私有目录；副本接收并发也有上限。副本扩展名、MIME、大小和文件头须符合允许类型，但不执行图片重解码或重编码，以便对原始字节比较。非法、超大输入返回 400/413，不创建核验记录。
+
+VerificationService 使用固定大小线程池及无等待队列处理文件/链 I/O，默认并发 2；满载返回 503。HTTP 接收阶段由 Servlet 大小限制和连接空闲超时约束；接收完成后的读取、摘要计算及链查询共用默认 60 秒处理时限。超时后取消任务并尝试关闭流，阻塞 Worker 在实际退出前继续占用容量，避免反复超时扩张线程。文件阶段超时返回 FILE_READ_FAILED，链阶段超时保留已算摘要并返回 CHAIN_QUERY_FAILED；后台 Worker 不能在请求超时后另写结果。
+
+STORED 实际打开版本对象并流式计算 SHA-256，不读取数据库保存的摘要作比较。COPY 只使用私有临时文件（业务临时文件 0600），不调用对象存储写入或登记新版本；处理结束清理临时文件。查询按发起人的机构选择 Gateway，并校验返回的证据编号、版本、摘要格式、OrgB 提交机构及首次交易编号，响应异常按 CHAIN_QUERY_FAILED 处理。
+
+V7__verification_records.sql 追加 verification_record，保存版本、执行人、来源、实际摘要/大小、链摘要/交易编号、结果、安全原因码与数据库 UTC 时间。MATCH/MISMATCH 必须同时具备可比较摘要，读失败不得残留部分摘要，链查询失败/未登记不得伪造链摘要。结果和 FILE_VERIFICATION_COMPLETED 审计在同一短事务提交；最终事务先锁任务再锁账号并重查当前权限，处理期间被移除成员或撤销身份时返回 403/401，不保存或暴露核验结果。历史查询也重新检查当前权限。共享授权路径在 T020 接入。
+
+本次核验不改变复核、存证或正式文件版本状态；本地仍 PENDING 而实际账本有有效记录时可返回 MATCH/MISMATCH，状态修复继续由存证对账处理。历史中的失败结果描述该次核验，不表示链记录被删除或文件已被篡改。
+
 ## 7. Fabric 合约与接入
 
 ### 7.1 开发网络
@@ -372,6 +460,12 @@ Gateway Java 1.13.0 的错误详情不保留 ChaincodeException.payload 业务�
 
 RabbitMQ 的发布确认与消费确认分别覆盖不同环节，二者都不能替代本地业务幂等。[官方确认机制说明](https://www.rabbitmq.com/docs/confirms)
 
+T011 使用显式 messaging profile 注册 RabbitMQ 连接、拓扑及处理器，默认 HTTP、database-only 和 database/storage 模式不连接 RabbitMQ。Spring AMQP 由 Boot 4.1.1 管理为 4.1.1；直接依赖 spring-rabbit，避免基础模式意外开启消息自动配置。
+
+默认采用持久化 Direct Exchange inspection.events，定版队列 inspection.file.finalize、上链队列 inspection.evidence.anchor；坏消息进入 inspection.dead.events / inspection.dead。Outbox 通过数据库短事务领取 SENDING 租约，在事务外发送持久化消息；等待 correlated confirm，并确认不存在 mandatory return 后，才以原租约条件更新 SENT。超时、NACK 或无法路由时保留原 eventId，按 2/10/30/60/300 秒退避；发送确认后数据库失败则由失效发送租约接管。
+
+手动 ACK 在业务处理器正常完成之后执行。非法消息或无对应持久事件的消息拒绝到死信队列；数据库检查点无法提交时保留未 ACK 消息并关闭当前消费通道，容器间隔 5 秒恢复，避免立即重入。未启用 ledger 的 T011 模式不注册上链消费者；T012 在显式 ledger profile 下注册上链消费者及恢复扫描。发布确认与返回顺序参照 [CorrelationData API](https://docs.spring.io/spring-amqp/docs/current/api/org/springframework/amqp/rabbit/connection/CorrelationData.html)，跨系统业务结果仍由数据库及后续链确认判断。
+
 ### 8.2 存证处理顺序
 
 1. 领取 chain_submission 的处理租约，若已 CONFIRMED 则直接结束重复事件。
@@ -387,7 +481,21 @@ transactionBytes 在提交前由 Transaction.getBytes() 保存，txId 用 getTra
 
 getBytes() 保存的检查点通常尚未包含客户端对交易或确认请求的签名；恢复后由 Gateway 配置的 signer 补签。因此必须使用原机构、同一客户端证书及与该证书匹配的私钥恢复，不能仅因 MSP 相同就替换为该机构其他身份。已实现的 CheckpointValidator 在恢复 transactionBytes 前校验 creator 的 MSP/证书、channel、外部及内部 transactionId、chaincode；在恢复 commitBytes 前校验请求身份、channel 和 transactionId。确认请求本身不包含 chaincode 字段，不对其声称存在该项校验。校验不通过直接拒绝恢复，不向网络提交或查询。
 
-以上序列化、校验和同身份跨进程调用已由 T006 验证；本节 chain_attempt/chain_submission 的数据库事务、租约和自动恢复顺序仍为后续 T012、T024、T027 的实施与故障验证要求。
+以上序列化、校验和同身份跨进程调用已由 T006 验证。T012 已接入下节数据库检查点及基础恢复；完整故障矩阵、人工重检及统一续租仍由 T023/T024/T027 实施与验收。
+
+#### 8.2.1 T012 业务存证实现边界
+
+显式启用 database、storage、messaging、ledger 后，由 InstitutionLedgerClients 固定两个机构客户端；用户请求不接收 MSP、签名者或证书参数。OrgB 使用原普通 User1 身份登记，OrgA 客户端供后续核验及跨机构查询使用。默认 HTTP 和旧上传/消息模式不读取链身份。run-backend.py --ledger 读取 FABRIC_*，local 可为缺失身份路径复用已准备的 gateway-paths.json；prod 必须显式提供身份路径。
+
+V6__chain_attempts.sql 追加 chain_attempt，保存原 txId、transaction_bytes、commit_bytes、阶段、验证码及区块号。交易编号全局唯一，每个存证的 attempt_no 唯一；检查点字段使用受限二进制持久化，不进入消息、业务 DTO 或日志。VALID/INVALID 必须关联准确的验证码和区块号，UNKNOWN 允许尚未取得 commit_bytes。
+
+AnchorProcessor 不持有数据库事务。AnchorTransactions 先锁任务再锁存证，通过数据库时间领取 120 秒租约；每次检查点及最终更新均校验 token 和有效期。先查询相同业务键：同摘要及机构等字段一致时，保存账本中的首次 registeredTxId；不同摘要转不可自动重试的 FAILED。首次登记按 PREPARED → SUBMITTING → SUBMITTED 顺序将检查点分别提交，再调用下一步 RPC；只有有效确认并核对账本，或已能查询到一致的有效账本记录时，业务才标为 CONFIRMED。
+
+提交结果或确认请求超时写 UNKNOWN 和下一次检查时间，保留原尝试。恢复时优先使用已有 commit_bytes；没有 commit_bytes 时重查业务键，再用原 transaction_bytes 及 txId 恢复提交，不盲目重新背书。身份或通道检查点校验被拒绝也保持 UNKNOWN，等待恢复原配置；本地恢复失败不能证明原交易无效。只有原尝试已明确 INVALID、属于允许重试的 MVCC/幻读冲突且业务键仍不存在，才允许产生新尝试；明确权限错误和摘要冲突不自动重试，DUPLICATE_TXID 且业务结果尚不明时继续 UNKNOWN。
+
+存证结果或持久化等待计划与 EVIDENCE_ANCHOR 消费 DONE、审计一起提交后才 ACK。基础扫描默认每 10 秒复用同一处理器，绕过 DONE；UNKNOWN 不设次数上限，明确可重试 FAILED 暂以 10 次为界，完整策略和人工入口由 T024 完善。基础租约不含续租，完整续租及进程故障矩阵留 T023/T027。
+
+GET /evidence-versions/{id} 返回固定版本元数据及 anchor；GET /evidence-versions/{id}/anchor 返回数据库存证状态、首次确认交易编号、最近尝试编号/阶段、验证码、区块号和安全错误码。这两个查询不调用 Fabric。每次重新校验当前账号、机构业务角色及显式任务成员，未知或不可见版本均为 403；单独 ORG_ADMIN 角色不授予查看权限。共享路径由 T020 接入。无正式版本列表、下载或人工强制成功入口。
 
 ### 8.3 UNKNOWN 与失败重试
 
@@ -418,9 +526,10 @@ chain_attempt.phase 采用 PREPARED、SUBMITTING、SUBMITTED、VALID、INVALID�
 | PUT /users/{id}/roles | roles、expectedLockVersion | 本机构管理员，仅可分配本机构适用角色 |
 | POST /tasks；GET /tasks | 名称、范围、资料要求；分页条件 | 委托方创建；列表按任务权限过滤 |
 | GET /tasks/{id} | 无 | 任务成员；不因单个版本授权开放整个任务 |
+| PUT /tasks/{id}/requirements | requirements（已有项含 id）、expectedLockVersion | 委托方任务管理员，DRAFT/ASSIGNED；保留稳定证据编号，禁止删除已绑定项 |
 | PUT /tasks/{id}/members | userIds、expectedLockVersion | 只更新调用者有权管理的本机构成员，保留其他机构成员及任务创建人 |
-| POST /tasks/{id}/assign | operatorOrgId、operatorAdminId | 委托方任务管理员；进入 ASSIGNED |
-| POST /tasks/{id}/subtasks | 名称、requirementIds | 分配阶段运营商管理员细化，不能删减必交要求 |
+| POST /tasks/{id}/assign | operatorOrgId、operatorAdminId、expectedLockVersion | 委托方任务管理员；进入 ASSIGNED |
+| POST /tasks/{id}/subtasks | 名称、requirementIds、expectedLockVersion | 分配阶段运营商管理员细化，不能删减必交要求 |
 | POST /subtasks/{id}/executions | droneId、expectedLockVersion | 运营商管理员初次分配或人工换机 |
 | POST /tasks/{id}/start | expectedLockVersion | 检查子任务、资料要求及设备完整，进入 RUNNING |
 | POST /tasks/{id}/submit-acceptance | expectedLockVersion | 运营商提交，进入 WAITING_ACCEPTANCE |
@@ -432,7 +541,7 @@ chain_attempt.phase 采用 PREPARED、SUBMITTING、SUBMITTED、VALID、INVALID�
 
 | 方法与路径 | 输入要点 | 权限及结果 |
 | --- | --- | --- |
-| POST /upload-sessions | clientRequestId、requirementId、executionId、filename、size | 操作员或设备，返回 uploadId、partSize、partCount、expiresAt |
+| POST /upload-sessions | clientRequestId、requirementId、executionId、filename、contentType、size | T010 为操作员；设备由 T015 接入。返回 uploadId、partSize、partCount、expiresAt 及进度 |
 | PUT /upload-sessions/{id}/parts/{partNo} | 分片二进制 | 校验会话归属和权限；同内容重复成功 |
 | GET /upload-sessions/{id} | 无 | 进度、已完成分片、处理状态、versionId |
 | POST /upload-sessions/{id}/complete | 无 | 冻结分片并异步处理，返回 202 或原结果 |
@@ -445,7 +554,7 @@ chain_attempt.phase 采用 PREPARED、SUBMITTING、SUBMITTED、VALID、INVALID�
 | POST /access-grants/{id}/revoke | reason、expectedLockVersion | 有权限的委托方审批人员 |
 | GET /access-grants | mine 或 taskId、分页 | 申请人查看自身申请；审批人查看管理范围申请 |
 | POST /evidence-versions/{id}/download-url | 无 | 当前权限校验后返回 url、expiresAt |
-| POST /evidence-versions/{id}/verifications | source=STORED/COPY，COPY 附 multipart 文件 | 当前权限校验，返回核验记录及结果 |
+| POST /evidence-versions/{id}/verifications | 查询串 source=STORED/COPY；COPY 为 multipart 单个 file，STORED 无正文 | 当前权限校验，返回核验记录及结果 |
 | GET /evidence-versions/{id}/verifications | 分页 | 当前仍有版本权限才返回核验历史 |
 | GET /evidence-versions/{id}/anchor | 无 | 存证状态、首次交易编号、最近失败原因 |
 | POST /evidence-versions/{id}/anchor-retries | reason | OrgB 任务管理员受控重试或重新检查；不绕过未知态确认 |
@@ -474,7 +583,7 @@ chain_attempt.phase 采用 PREPARED、SUBMITTING、SUBMITTED、VALID、INVALID�
 | 202 | 上传完成已接收，后台处理中；不宣称已存证 |
 | 400 | 参数错误、分片不完整、文件类型不支持 |
 | 401 | 未登录、用户令牌或设备凭证无效 |
-| 403 / 404 | 无操作权限；不可见资源统一按 404 处理，不能泄露详情 |
+| 403 / 404 | 当前任务、上传及版本资源未知或不可见时统一 403；未映射路由为 404，均不泄露详情 |
 | 409 | VERSION_CONFLICT、PART_CONTENT_CONFLICT、TASK_COMPLETED、TASK_NOT_ACCEPTABLE |
 | 413 | FILE_TOO_LARGE 或分片超出配置 |
 | 503 | 必需依赖不可用；核验已能形成明确不确定结果时返回结果代码及原因 |
@@ -499,7 +608,15 @@ chain_attempt.phase 采用 PREPARED、SUBMITTING、SUBMITTED、VALID、INVALID�
 
 开发环境包含 MySQL、Redis、对象存储、RabbitMQ、应用及 Fabric 网络；模拟器连接 HTTP 设备接口。配置区分应用访问地址与返回给浏览器的对象存储地址，不能把仅容器内可解析的地址签发给用户。
 
-数据库、对象文件、消息及 Fabric 账本分别使用持久卷。应用重启不等于重建环境；不要将清空链网络作为日常启动步骤。数据库迁移、初始化账号、3～5 台设备及示例任务使用可重复执行的初始化过程。
+MySQL 接入必须显式启用 database profile，由 application-database.yml 配置数据源、MyBatis 和 Flyway；默认 local Web 启动仍排除这些自动配置，不自动连接数据库。Spring Boot 不自动加载根目录 .env。Flyway 开启迁移校验，禁止自动 baseline 及 clean，禁用 Spring SQL 初始化脚本，数据库结构统一由版本化迁移维护。
+
+T007 已另行实测可执行 JAR 在首次空库启动时成功应用 V1；原生 Spring profile 组合中的 prod+demo 被 guard 拒绝；仅使用 prod、未启用 database 且无数据库凭据时，应用仍可独立启动并通过状态接口返回 HTTP 200。这不代表未启用 database 时已连接数据库。
+
+演示初始化还必须显式启用 demo，并同时包含 local、database；一旦包含 prod，启动前的 profile guard 即拒绝运行。`init-demo-credentials.py` 只创建一次 `.local/demo-credentials.json`，生成随机账号密码及独立设备令牌，文件权限为 0600，不覆盖原文件或输出秘密原文。DemoDataConfiguration 读取并校验该文件，在一个数据库事务中插入六个必要演示账号和一台设备：用户保存 BCrypt 摘要，设备保存令牌 SHA-256。重复初始化核对原账号/设备身份及凭据，不重置密码、设备令牌或已有业务数据；无法匹配时拒绝静默覆盖。日志只记录数量及凭据文件路径，MyBatis 参数日志关闭，凭据 JSON 解析错误不附带原文或原异常 cause。
+
+demo 不创建任务或成员，也不伪造已完成状态。账号认证和任务创建已由 T008/T009 的正式接口提供；设备接口、3～5 台模拟设备和完整演示任务在对应阶段补齐。
+
+数据库、对象文件、消息及 Fabric 账本分别使用持久卷。应用重启不等于重建环境；不要将清空链网络作为日常启动步骤。数据库迁移及演示初始化须可重复执行，保留原凭据和已有数据。
 
 私钥、密码和真实设备令牌由环境变量或本地挂载提供，不写入代码或日志；对象桶关闭公共访问，应用只按内部生成的键操作文件。
 

@@ -12,7 +12,15 @@
 - T004 Fabric 开发网络已完成：两个 Peer 和一个 Orderer 健康，均已加入 mychannel；保留卷重建后通道高度、区块哈希和证书一致。
 - T005 Java 链码已完成：50 项测试通过，已部署 evidence 0.1.0，双机构普通用户的登记、查询、幂等、冲突与越权拒绝实测通过。
 - T006 Java Gateway 已完成：后端共 32 项测试通过；四个独立 JVM 完成交易检查点恢复、有效提交、双机构查询及幂等/拒绝用例。
-- **M1 技术验证已通过**，下一项为 T007：建立数据库迁移和最小初始化数据。
+- **M1 技术验证已通过**。T007 已完成 MySQL/MyBatis/Flyway 接入、五表迁移及 6 个账号/1 台设备初始化；重复启动、24 项真实约束检查和 UTC 毫秒往返通过。
+- T008 认证与角色管理已完成：登录、退出、me、机构内角色修改可用；后端 56 项测试及 48 次真实 HTTP 验收通过，旧令牌失效、越权拒绝和并发 CAS 已验证。
+- T009 任务与成员管理已完成：九项操作覆盖草稿、资料要求、成员、分配、子任务、初始批次和启动；66 项后端测试、90 次真实 HTTP 调用及 35 项数据库约束检查通过。
+- T010 私有上传已完成：会话创建、原始分片上传和进度查询接入真实 Garage；72 项后端测试、68 次真实 HTTP 流程及 49 项数据库约束检查通过，原数据及凭据保留。
+- T011 异步定版与 Outbox 已完成：99 项后端测试、42 次真实 HTTP 联调及 68 项数据库约束通过，已验证唯一版本、消息重复、无法路由重试和临时故障恢复。
+- T012 业务存证已完成：129 项后端测试、45 次真实 HTTP 联调及 87 项数据库约束通过；两个版本真实上链，确认响应丢失后用原交易恢复成功。
+- T013 文件核验已完成：148 项后端测试、62 次真实 HTTP 联调及 110 项数据库约束通过；原文件/副本比较、五种结果、历史权限及处理中撤销成员均已验证。
+- **T014 已完成，M2 最小真实闭环已通过**：打包应用经正式接口自动完成任务、上传、定版、真实存证和核验；33 次 HTTP 验收及 15 次同版本复查通过，演示成果保留。
+- 下一项为 **T015：设备管理、设备认证和上报**；完整 MVP 继续按任务清单推进。
 
 ## 项目文档
 
@@ -25,6 +33,14 @@
 | [配置样例](.env.example) | 本地环境参数约定，后续由应用和部署配置接入 |
 | [后端说明](backend/README.md) | 构建、运行、包结构和 HTTP 基础约定 |
 | [T002 HTTP 示例](examples/t002.http) | 状态接口、请求标识及 404/405 调用 |
+| [T008 HTTP 示例](examples/t008.http) | 登录、当前身份、角色修改、退出及令牌失效 |
+| [T009 HTTP 示例](examples/t009.http) | 双机构创建/分配任务、维护成员、细化资料、分配设备及启动 |
+| [T010 HTTP 示例](examples/t010.http) | 创建上传会话、上传附带 PNG、查询进度及同片重试 |
+| [T011 HTTP 示例](examples/t011.http) | 请求异步定版、重复完成及轮询版本编号 |
+| [T012 HTTP 示例](examples/t012.http) | 固定版本详情、存证状态、实际交易编号及越权拒绝 |
+| [T013 HTTP 示例](examples/t013.http) | 原文件/相同副本/修改副本核验、历史查询与权限拒绝 |
+| [T014 HTTP 示例](examples/t014.http) | 从登录到任务、上传、异步定版、真实存证和文件核验的完整调用顺序 |
+| [M2 演示说明](docs/m2-demo.md) | 自动验收、保留结果复查和面试演示步骤 |
 | [基础设施说明](deploy/README.md) | 四个业务服务、地址、持久卷及验证命令 |
 | [Fabric 网络说明](deploy/fabric/README.md) | 固定版本、通道创建、证书及保留账本的启停 |
 | [Java 链码说明](chaincode/README.md) | 两个合约接口、参数、权限、幂等及 CaaS 部署 |
@@ -58,7 +74,7 @@ java -jar backend/target/inspection-backend-0.1.0.jar
 curl -i -H 'X-Trace-Id: demo-001' http://127.0.0.1:8080/api/v1/system/status
 ```
 
-状态接口返回应用 `RUNNING`、UTC 时间和请求标识。当前后端可独立启动，业务服务连接随后续任务接入。环境覆盖及包边界详见 [后端说明](backend/README.md)。
+状态接口返回应用 `RUNNING`、UTC 时间和请求标识。上述命令启动独立 HTTP 基础模式；认证及任务接口使用下文的数据库模式。环境覆盖及包边界详见 [后端说明](backend/README.md)。
 
 ## 环境参数
 
@@ -68,9 +84,52 @@ curl -i -H 'X-Trace-Id: demo-001' http://127.0.0.1:8080/api/v1/system/status
 python3 deploy/scripts/init-env.py
 ```
 
-Spring Boot 从进程环境读取 `SPRING_PROFILES_ACTIVE`、`SERVER_ADDRESS`、`SERVER_PORT`，默认 `local`、`127.0.0.1`、`8080`。它不会自动加载 `.env`，初始化脚本也不会启动服务或切换 JAVA_HOME。数据库、消息、对象存储和 JWT 随对应任务接入；Fabric SDK 适配已验证，正式业务存证处理在 T012 接入。
+Spring Boot 从进程环境读取 `SPRING_PROFILES_ACTIVE`、`SERVER_ADDRESS`、`SERVER_PORT`，默认 `local`、`127.0.0.1`、`8080`。它不会自动加载 `.env`，初始化脚本也不会启动服务或切换 JAVA_HOME。后端启动器显式读取 DB_*、S3_*、UPLOAD_*、VERIFICATION_*、RABBITMQ_*、MESSAGING_*、FABRIC_*、JWT_SECRET；保留初始化生成的原凭据和 64 位小写十六进制密钥。对象存储在 T010 接入，T011 接入异步定版及消息，T012 通过 --ledger 显式启用真实业务存证。
 
-后端固定 Spring Boot 4.1.1，已完成构建、测试及打包启动验证；四个业务服务镜像已通过 T003 验证，Fabric 2.5.16 节点、CLI 和开发通道已通过 T004 验证。Gateway Java 1.13.0 已通过 T006 双机构及跨进程检查点验证；MyBatis Starter 4.0.0 待 T007 接入，具体状态见验证记录。
+后端固定 Spring Boot 4.1.1，已完成构建、测试及打包启动验证；四个业务服务镜像已通过 T003 验证，Fabric 2.5.16 节点、CLI 和开发通道已通过 T004 验证。Gateway Java 1.13.0 已通过 T006；MyBatis Starter 4.0.0、Flyway 12.4.0 和 Connector/J 9.7.0 已通过 T007，具体状态见验证记录。
+
+## 启动数据库、存储与异步处理后端
+
+MySQL、Garage、RabbitMQ 已启动且已选择 JDK 21 时，在项目根目录执行：
+
+```bash
+python3 deploy/scripts/init-demo-credentials.py
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+python3 deploy/scripts/verify-database.py
+python3 deploy/scripts/verify-auth.py
+python3 deploy/scripts/verify-tasks.py
+python3 deploy/scripts/verify-upload.py
+python3 deploy/scripts/verify-pipeline.py
+python3 deploy/scripts/run-backend.py --demo
+```
+
+启动器读取本地 .env 的数据库、存储及 RabbitMQ 参数，开启 local,database,storage,messaging[,demo]。移除 --demo 只迁移结构、不插入演示账号。随机密码和设备令牌保存在 .local/demo-credentials.json（0600），不打印或提交；重复启动保留既有值。prod 组合由应用拒绝演示初始化。迁移、角色清单和验证方法见 [后端说明](backend/README.md)。
+
+## 启用真实 Fabric 业务存证与文件核验
+
+启动下文 Fabric 网络及链码后，复用原数据库、RabbitMQ、Garage 和普通 User1 身份：
+
+```bash
+python3 deploy/scripts/verify-anchor.py
+python3 deploy/scripts/verify-verifications.py
+python3 deploy/scripts/run-backend.py --demo --ledger
+```
+
+--ledger 追加 ledger profile，连接两个机构客户端并启动上链消费者及恢复扫描。local 为缺少的身份路径读取原 .local/fabric/gateway-paths.json；prod 必须配置明确的身份路径。省略 --ledger 可继续运行上传及消息模式。存证详情和状态查询见 [T012 示例](examples/t012.http)，只有有效账本结果才显示 CONFIRMED；超时保留 UNKNOWN 及原交易检查点。
+
+文件核验及历史查询见 [T013 示例](examples/t013.http)，STORED 实际读取原对象，COPY 比较本次副本且不覆盖原文件。核验并发、文件上限及处理时限可由 VERIFICATION_* 配置。
+
+真实探针使用独立业务数据和消息拓扑，结束后清理自己的链外夹具；已提交的测试证据保留在原账本，不重建或清空链网络。
+
+## 最小真实闭环演示
+
+依赖服务及链码已运行、已按上文构建带 database-probe 的后端时，先停止其他后端实例，再执行：
+
+```bash
+python3 deploy/scripts/verify-mvp.py
+```
+
+脚本使用现有演示账号，经正式 HTTP 接口创建并启动任务、单片上传图片，等待自动定版与真实存证，再核验原文件和副本。成功数据会保留；只读检查器核对数据库、私有对象和两个机构的实际账本。结果位于 `.local/mvp-demo/<run>/`，复查同一版本使用 `python3 deploy/scripts/verify-mvp.py --recheck .local/mvp-demo/<run>`。完整步骤见 [M2 演示说明](docs/m2-demo.md)。
 
 ## 启动业务基础设施
 
@@ -119,7 +178,7 @@ python3 deploy/fabric/verify-gateway.py
 
 构建不会自动向链提交交易。Python 启动器使用两机构 User1 身份，在四个独立 JVM 中验证背书后保存交易、恢复原 txId 提交、恢复确认请求、双方查询及幂等/拒绝场景。检查点和报告保存在 `.local/fabric/gateway-probe/`，latest.json 指向最近成功运行。
 
-默认 Web 应用可独立启动，不读取证书或连接 Fabric。T006 完成的是 SDK 及文件检查点验证，数据库中的交易尝试、Outbox 和故障恢复仍按后续任务实现。参数、分阶段命令及失败处理见 [后端说明](backend/README.md)。
+默认 Web 应用可独立启动，不读取证书或连接 Fabric。T006 完成的是 SDK 及文件检查点验证，基础 Outbox 已在 T011 接入；T012 接入数据库交易尝试和基础 UNKNOWN 恢复，完整故障矩阵由 M4 验收。参数、分阶段命令及失败处理见 [后端说明](backend/README.md)。
 
 ## 开发与演示边界
 

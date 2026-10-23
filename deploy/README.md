@@ -1,8 +1,22 @@
 # 本地业务基础设施
 
-T003 使用一个 Compose 项目运行 MySQL、Redis、RabbitMQ 和 Garage S3。后端仍在宿主机独立启动，业务客户端随后续任务接入。
+T003 使用一个 Compose 项目运行 MySQL、Redis、RabbitMQ 和 Garage S3。后端在宿主机独立启动，当前已接入 MySQL、Garage 和 RabbitMQ；Redis 设备缓存随后续任务接入。
 
 T004 的双机构链网络使用独立 Compose 项目，T005 的两个 Java CaaS 实例也由该项目统一管理；构建部署、验证及保留账本的启停操作见 [Fabric 网络说明](fabric/README.md)。
+
+T007 已接入实际 MySQL，业务结构由后端 Flyway 迁移维护，Compose 仅负责数据库服务和持久卷。在根目录执行 `python3 deploy/scripts/run-backend.py --demo` 可使用现有 .env 启动数据库模式；首次先按 [后端说明](../backend/README.md)构建并运行 init-demo-credentials.py。普通数据库模式不加 --demo，演示凭据只存在忽略提交的本地文件中，不写入 Compose 或迁移脚本。
+
+T008 启动器同时读取 .env 中的 JWT_SECRET：必须保留初始化生成的 64 位小写十六进制密钥。数据库启动自动追加 V2 审计表，不能回改 V1、删除卷或重建凭据来完成升级。认证接口和真实 HTTP/MySQL 验证使用方式见 [后端说明](../backend/README.md)。
+
+T009 再追加 V3 子任务、资料项和执行批次表，沿用现有启动命令与凭据。`python3 deploy/scripts/verify-tasks.py` 使用隔离任务、账号和设备验证正式接口，清理自己的测试数据并保留审计；执行顺序和 HTTP 示例见 [后端说明](../backend/README.md)。
+
+T010 追加 V4 上传会话、分片和版本表，接入 database、storage profiles，从现有 .env 读取 DB_*、S3_*、UPLOAD_* 和 JWT_SECRET；Garage 必须沿用原私有桶及访问凭据。`python3 deploy/scripts/verify-upload.py` 通过正式任务/上传接口和真实 Garage 验证字节、权限、并发及依赖故障，只清理本次对象前缀和隔离数据。上传限制默认值见 .env.example，已有 .env 不需要重建。
+
+T011 追加 V5 Outbox、消费检查点和待存证表。启动器默认启用 database、storage、messaging，并读取 RABBITMQ_*、MESSAGING_*；复用既有 RabbitMQ 用户及密码。应用自动声明持久化 Exchange、定版/上链队列与死信队列，默认名称见 .env.example。已有 .env 使用默认拓扑，无需重新生成。`python3 deploy/scripts/verify-pipeline.py` 使用隔离拓扑验证异步处理，结束后只删除自己的测试拓扑。未启用 ledger 时上链队列保留消息，入队不代表链上确认。
+
+T012 追加 V6 交易尝试表。实际存证须启动现有 Fabric 网络/链码，再执行 `python3 deploy/scripts/run-backend.py --demo --ledger`；该选项启用两个普通 User1 客户端、上链消费者和恢复扫描。local 使用原 gateway-paths.json 补齐缺少的身份路径，prod 要求显式提供 FABRIC_* 身份路径。省略 --ledger 仍可运行旧上传/消息模式，上链队列保留消息。`python3 deploy/scripts/verify-anchor.py` 使用独立业务夹具和消息拓扑验证真实确认与 UNKNOWN 恢复；链上的测试登记是追加记录，会保留在原账本。
+
+T013 追加 V7 核验记录表，沿用 `--ledger` 模式，通过发起人所属机构查询真实登记摘要。新增 VERIFICATION_* 控制副本大小、并发、处理时限和私有临时目录；已有 .env 使用应用默认值，无需重建。`python3 deploy/scripts/verify-verifications.py` 验证原文件/副本、缺失文件、链查询故障和权限；测试使用独立业务数据与消息拓扑，链上的测试登记保留。
 
 ## 首次启动
 

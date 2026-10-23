@@ -22,7 +22,7 @@ import java.nio.file.Files;
 import java.security.GeneralSecurityException;
 import java.util.concurrent.TimeUnit;
 
-/** One reusable Gateway and signing identity per institution. No automatic web startup connection. */
+/** One reusable Gateway and signing identity per institution, enabled by explicit ledger configuration or probes. */
 public final class GatewayEvidenceLedgerClient implements EvidenceLedgerClient {
     private static final JsonMapper JSON = JsonMapper.builder()
             .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)

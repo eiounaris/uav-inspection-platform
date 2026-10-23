@@ -1,0 +1,35 @@
+inspection:
+  verification:
+    max-file-size: ${VERIFICATION_MAX_FILE_SIZE:209715200}
+    concurrency: ${VERIFICATION_CONCURRENCY:2}
+    timeout-seconds: ${VERIFICATION_TIMEOUT_SECONDS:60}
+    temp-directory: ${VERIFICATION_TEMP_DIRECTORY:.local/uploads/verification}
+    min-free-space: ${VERIFICATION_MIN_FREE_SPACE:33554432}
+    allowed-extensions: ${VERIFICATION_ALLOWED_EXTENSIONS:jpg,jpeg,png,pdf,mp4}
+  ledger:
+    channel: ${FABRIC_CHANNEL:mychannel}
+    chaincode: ${FABRIC_CHAINCODE:evidence}
+    contract: ${FABRIC_CONTRACT:EvidenceContract}
+    recovery-enabled: true
+    recovery-delay-ms: ${FABRIC_RECOVERY_DELAY_MS:10000}
+    orga:
+      msp-id: ${FABRIC_ORGA_MSP_ID:Org1MSP}
+      endpoint: ${FABRIC_ORGA_GATEWAY_ENDPOINT:localhost:7051}
+      tls-server-name: ${FABRIC_ORGA_TLS_SERVER_NAME:peer0.org1.example.com}
+      certificate: ${FABRIC_ORGA_CERT_PATH}
+      private-key: ${FABRIC_ORGA_KEY_PATH}
+      tls-certificate: ${FABRIC_ORGA_TLS_CERT_PATH}
+    orgb:
+      msp-id: ${FABRIC_ORGB_MSP_ID:Org2MSP}
+      endpoint: ${FABRIC_ORGB_GATEWAY_ENDPOINT:localhost:9051}
+      tls-server-name: ${FABRIC_ORGB_TLS_SERVER_NAME:peer0.org2.example.com}
+      certificate: ${FABRIC_ORGB_CERT_PATH}
+      private-key: ${FABRIC_ORGB_KEY_PATH}
+      tls-certificate: ${FABRIC_ORGB_TLS_CERT_PATH}
+logging:
+  level:
+    org.hyperledger.fabric.client: WARN
+    io.grpc: WARN
+server:
+  tomcat:
+    connection-timeout: 60s

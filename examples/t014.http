@@ -1,0 +1,210 @@
+# T014 self-contained manual flow: no earlier .http file is required.
+# Prerequisites and automatic acceptance: docs/m2-demo.md.
+# Start the ordinary backend: python3 deploy/scripts/run-backend.py --demo --ledger
+# Run each request in order; repeat only the two polling requests until their stated condition holds.
+# Configure ownerAdminPassword/operatorAdminPassword/operatorUserPassword in a local REST Client environment.
+# Get passwords from .local/demo-credentials.json; do not paste secrets into this tracked file.
+@baseUrl = http://127.0.0.1:8080
+@operatorOrgId = 00000000-0000-4000-8000-000000000002
+@operatorAdminId = 10000000-0000-4000-8000-000000000004
+@operatorUserId = 10000000-0000-4000-8000-000000000005
+@droneId = 20000000-0000-4000-8000-000000000001
+# Generate a new canonical UUID once for a new run: python3 -c 'import uuid; print(uuid.uuid4())'
+# Keep that UUID unchanged when retrying the same upload. It is not a credential.
+@clientRequestId = REPLACE_WITH_NEW_CANONICAL_UUID
+
+### 1. Owner task administrator logs in
+# @name ownerLogin
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{"username":"owner-admin","password":"{{ownerAdminPassword}}"}
+
+### 2. Operator task administrator logs in
+# @name operatorLogin
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{"username":"operator-admin","password":"{{operatorAdminPassword}}"}
+
+### 3. Actual uploader logs in; OPERATOR_TASK_ADMIN alone cannot upload as this user
+# @name uploaderLogin
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{"username":"operator-user","password":"{{operatorUserPassword}}"}
+
+### 4. Create one real task with one required material; creator membership is automatic
+# @name draft
+POST {{baseUrl}}/api/v1/tasks
+Authorization: Bearer {{ownerLogin.response.body.$.data.accessToken}}
+Content-Type: application/json
+X-Trace-Id: t014-task-create
+
+{
+  "name": "M2 真实闭环：园区设备外观巡检",
+  "scope": "运营商使用一台演示设备采集一张图片，保存版本、登记摘要并核验文件。",
+  "requirements": [{"name":"设备外观照片","required":true}]
+}
+
+### 5. Assign OrgB; operator-admin becomes a task member
+# @name assigned
+POST {{baseUrl}}/api/v1/tasks/{{draft.response.body.$.data.id}}/assign
+Authorization: Bearer {{ownerLogin.response.body.$.data.accessToken}}
+Content-Type: application/json
+X-Trace-Id: t014-task-assign
+
+{
+  "operatorOrgId": "{{operatorOrgId}}",
+  "operatorAdminId": "{{operatorAdminId}}",
+  "expectedLockVersion": {{draft.response.body.$.data.lockVersion}}
+}
+
+### 6. Add the uploader while retaining the operator administrator and the owner's members
+# @name members
+PUT {{baseUrl}}/api/v1/tasks/{{draft.response.body.$.data.id}}/members
+Authorization: Bearer {{operatorLogin.response.body.$.data.accessToken}}
+Content-Type: application/json
+X-Trace-Id: t014-task-members
+
+{
+  "userIds": ["{{operatorAdminId}}", "{{operatorUserId}}"],
+  "expectedLockVersion": {{assigned.response.body.$.data.lockVersion}}
+}
+
+### 7. Create the subtask and bind the existing material requirement
+# @name subdivided
+POST {{baseUrl}}/api/v1/tasks/{{draft.response.body.$.data.id}}/subtasks
+Authorization: Bearer {{operatorLogin.response.body.$.data.accessToken}}
+Content-Type: application/json
+X-Trace-Id: t014-subtask
+
+{
+  "name": "单机外观采集",
+  "requirementIds": ["{{draft.response.body.$.data.requirements[0].id}}"],
+  "expectedLockVersion": {{members.response.body.$.data.lockVersion}}
+}
+
+### 8. Allocate the existing demo drone; this expected version belongs to the subtask
+# @name execution
+POST {{baseUrl}}/api/v1/subtasks/{{subdivided.response.body.$.data.subtasks[0].id}}/executions
+Authorization: Bearer {{operatorLogin.response.body.$.data.accessToken}}
+Content-Type: application/json
+X-Trace-Id: t014-execution
+
+{
+  "droneId": "{{droneId}}",
+  "expectedLockVersion": {{subdivided.response.body.$.data.subtasks[0].lockVersion}}
+}
+
+### 9. Refresh the task aggregate version after allocating the drone
+# @name prepared
+GET {{baseUrl}}/api/v1/tasks/{{draft.response.body.$.data.id}}
+Authorization: Bearer {{operatorLogin.response.body.$.data.accessToken}}
+
+### 10. Start; the READY execution ID is reused and becomes RUNNING
+# @name started
+POST {{baseUrl}}/api/v1/tasks/{{draft.response.body.$.data.id}}/start
+Authorization: Bearer {{operatorLogin.response.body.$.data.accessToken}}
+Content-Type: application/json
+X-Trace-Id: t014-task-start
+
+{"expectedLockVersion":{{prepared.response.body.$.data.lockVersion}}}
+
+### 11. Create a durable upload session for the bundled 79-byte PNG
+# @name upload
+POST {{baseUrl}}/api/v1/upload-sessions
+Authorization: Bearer {{uploaderLogin.response.body.$.data.accessToken}}
+Content-Type: application/json
+X-Trace-Id: t014-upload-create
+
+{
+  "clientRequestId": "{{clientRequestId}}",
+  "requirementId": "{{draft.response.body.$.data.requirements[0].id}}",
+  "executionId": "{{started.response.body.$.data.subtasks[0].currentExecutionId}}",
+  "filename": "inspection-sample.png",
+  "contentType": "image/png",
+  "size": 79
+}
+
+### 12. Upload one raw business part; no multipart form or storage credentials
+PUT {{baseUrl}}/api/v1/upload-sessions/{{upload.response.body.$.data.uploadId}}/parts/1
+Authorization: Bearer {{uploaderLogin.response.body.$.data.accessToken}}
+Content-Type: application/octet-stream
+X-Trace-Id: t014-upload-part
+
+< ./files/inspection-sample.png
+
+### 13. Freeze and request asynchronous finalization; HTTP 202 acknowledges reception
+POST {{baseUrl}}/api/v1/upload-sessions/{{upload.response.body.$.data.uploadId}}/complete
+Authorization: Bearer {{uploaderLogin.response.body.$.data.accessToken}}
+X-Trace-Id: t014-upload-complete
+
+### 14. POLL until processingStatus=COMPLETED and versionId is non-null
+# @name finalized
+GET {{baseUrl}}/api/v1/upload-sessions/{{upload.response.body.$.data.uploadId}}
+Authorization: Bearer {{uploaderLogin.response.body.$.data.accessToken}}
+
+### 15. Read the immutable version; reviewStatus stays PENDING at this stage
+# @name version
+GET {{baseUrl}}/api/v1/evidence-versions/{{finalized.response.body.$.data.versionId}}
+Authorization: Bearer {{uploaderLogin.response.body.$.data.accessToken}}
+
+### 16. POLL until status=CONFIRMED; confirmedTxId is the first registration transaction
+# UNKNOWN means an uncertain result awaiting original-transaction recovery; never edit SQL to force success.
+# @name anchored
+GET {{baseUrl}}/api/v1/evidence-versions/{{finalized.response.body.$.data.versionId}}/anchor
+Authorization: Bearer {{uploaderLogin.response.body.$.data.accessToken}}
+
+### 17. Operator verifies actual stored bytes using the OrgB Gateway; expect MATCH
+# @name operatorStored
+POST {{baseUrl}}/api/v1/evidence-versions/{{finalized.response.body.$.data.versionId}}/verifications?source=STORED
+Authorization: Bearer {{uploaderLogin.response.body.$.data.accessToken}}
+X-Trace-Id: t014-operator-stored
+
+### 18. Owner task member verifies the same version through the OrgA Gateway; expect MATCH
+# @name ownerStored
+POST {{baseUrl}}/api/v1/evidence-versions/{{finalized.response.body.$.data.versionId}}/verifications?source=STORED
+Authorization: Bearer {{ownerLogin.response.body.$.data.accessToken}}
+X-Trace-Id: t014-owner-stored
+
+### 19. An identical request-local copy yields MATCH and does not create another evidence version
+POST {{baseUrl}}/api/v1/evidence-versions/{{finalized.response.body.$.data.versionId}}/verifications?source=COPY
+Authorization: Bearer {{uploaderLogin.response.body.$.data.accessToken}}
+Content-Type: multipart/form-data; boundary=t014-identical-boundary
+X-Trace-Id: t014-copy-identical
+
+--t014-identical-boundary
+Content-Disposition: form-data; name="file"; filename="inspection-sample.png"
+Content-Type: image/png
+
+< ./files/inspection-sample.png
+--t014-identical-boundary--
+
+### 20. Prepare the modified request-local copy once from the repository root:
+# python3 -c 'from pathlib import Path; p=Path(".local"); p.mkdir(exist_ok=True); b=bytearray(Path("examples/files/inspection-sample.png").read_bytes()); b[-9]^=1; (p/"t014-copy-modified.png").write_bytes(b)'
+# Keep the PNG signature. One byte after the signature changes; the original file and formal object stay intact.
+### Modified COPY yields MISMATCH with HTTP 200, not a dependency failure
+POST {{baseUrl}}/api/v1/evidence-versions/{{finalized.response.body.$.data.versionId}}/verifications?source=COPY
+Authorization: Bearer {{uploaderLogin.response.body.$.data.accessToken}}
+Content-Type: multipart/form-data; boundary=t014-modified-boundary
+X-Trace-Id: t014-copy-modified
+
+--t014-modified-boundary
+Content-Disposition: form-data; name="file"; filename="inspection-sample.png"
+Content-Type: image/png
+
+< ../.local/t014-copy-modified.png
+--t014-modified-boundary--
+
+### 21. Read persisted results, reasons, users and UTC timestamps with current version permission
+GET {{baseUrl}}/api/v1/evidence-versions/{{finalized.response.body.$.data.versionId}}/verifications?page=1&pageSize=20
+Authorization: Bearer {{ownerLogin.response.body.$.data.accessToken}}
+
+### 22. Re-read the same version: COPY verification has not changed versionNo, sha256 or anchor status
+GET {{baseUrl}}/api/v1/evidence-versions/{{finalized.response.body.$.data.versionId}}
+Authorization: Bearer {{ownerLogin.response.body.$.data.accessToken}}
+
+### 23. Task remains RUNNING; this milestone does not implement review or task acceptance
+GET {{baseUrl}}/api/v1/tasks/{{draft.response.body.$.data.id}}
+Authorization: Bearer {{ownerLogin.response.body.$.data.accessToken}}

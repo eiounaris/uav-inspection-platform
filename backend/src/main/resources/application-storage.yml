@@ -1,0 +1,20 @@
+inspection:
+  storage:
+    endpoint: ${S3_ENDPOINT}
+    region: ${S3_REGION:garage}
+    bucket: ${S3_BUCKET:uav-evidence}
+    force-path-style: ${S3_FORCE_PATH_STYLE:true}
+    access-key: ${S3_ACCESS_KEY}
+    secret-key: ${S3_SECRET_KEY}
+  upload:
+    max-file-size: ${UPLOAD_MAX_FILE_SIZE:209715200}
+    part-size: ${UPLOAD_PART_SIZE:8388608}
+    session-ttl-seconds: ${UPLOAD_SESSION_TTL_SECONDS:86400}
+    allowed-extensions: ${UPLOAD_ALLOWED_EXTENSIONS:jpg,jpeg,png,pdf,mp4}
+    temp-directory: ${UPLOAD_TEMP_DIRECTORY:.local/uploads/tmp}
+    min-free-space: ${UPLOAD_MIN_FREE_SPACE:33554432}
+logging:
+  level:
+    software.amazon.awssdk: WARN
+    software.amazon.awssdk.request: "OFF"
+    org.springframework.web: INFO

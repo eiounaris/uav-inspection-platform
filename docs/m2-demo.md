@@ -1,0 +1,107 @@
+# M2 最小真实闭环演示
+
+这条链路从现有演示账号登录开始，通过正式接口创建一个任务、一个资料项和一个执行批次，上传一张图片，等待异步定版与真实 Fabric 确认，再由两个机构核验文件。自动验收入口为 `python3 deploy/scripts/verify-mvp.py`，手动请求见 [t014.http](../examples/t014.http)，无需先运行其他 HTTP 示例。
+
+这是 M2 的最小业务闭环验收。完整 MVP 还包含后续多机上报、换机、人工复核、任务验收及共享等功能；当前任务应保持 `RUNNING`，版本复核状态应保持 `PENDING`。
+
+## 1. 准备环境
+
+在项目根目录操作，选择 JDK 21，沿用已有 `.env`、`.local/demo-credentials.json`、数据库、Garage 私有桶、RabbitMQ 和 Fabric 身份。基础设施、通道及 `evidence` 链码的首次准备方法见 [项目说明](../README.md) 和 [部署说明](../deploy/README.md)。
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+docker compose --env-file .env -f deploy/compose.yml up -d --wait --wait-timeout 240
+python3 deploy/fabric/network.py up
+python3 deploy/fabric/network.py verify
+```
+
+演示复用六个既有账号中的 `owner-admin`、`operator-admin`、`operator-user`，以及现有 `UAV-DEMO-001`。账号密码读取本机凭据文件；业务链调用使用两机构普通 User1 应用身份。无需重建账号、重新生成凭据或清空数据库和账本。
+
+## 2. 自动运行并保留结果
+
+若本机已运行 `run-backend.py`，先结束该后端进程，保留 MySQL、Garage、RabbitMQ 和 Fabric 服务运行。自动验收负责启动和停止自己的应用实例。
+
+```bash
+python3 deploy/scripts/verify-mvp.py
+```
+
+脚本启动打包后的应用 JAR，使用随机 HTTP 端口和独立消息拓扑，经正式 HTTP 接口驱动业务。Outbox 发布器、定版消费者和上链消费者自动工作；脚本轮询业务查询接口等待结果，不直接调用处理器，也不修改成功状态。
+
+自动流程由委托方执行一次 `STORED` 核验，运营商分别核验原样和修改副本，形成三条结果。开始新一轮前，应先完成已有的待发送消息、定版或存证工作；独立消息拓扑并不隔离同一数据库中的待处理业务。
+
+成功运行的任务、上传会话、分片、固定版本、私有对象、存证检查点、核验记录和账本登记会保留，可用于后续演示。脚本停止本次应用并清理自己的消息拓扑，不删除这些业务证据。产物放在 `.local/mvp-demo/<run>/`，具体目录以命令输出为准：
+
+| 文件 | 用途 |
+| --- | --- |
+| `report.json` | 本轮 HTTP 流程和验收结论 |
+| `inspection.json` | 数据库、对象和实际账本对应关系的只读核对结果 |
+| `resources.json` | 保留的任务、上传及版本等资源编号，供复查使用 |
+| `copy-original.png`、`copy-modified.png` | 本轮副本核验的实际输入，后者只修改一个字节 |
+
+脚本再次正常运行会创建另一条演示任务；继续检查同一条任务，使用原运行目录：
+
+```bash
+python3 deploy/scripts/verify-mvp.py --recheck .local/mvp-demo/<run>
+```
+
+`--recheck` 使用完整业务 profiles 和本次独立消息拓扑重启应用，关闭 Outbox 定时投递、定版恢复扫描和存证恢复扫描，复用保留的任务与版本进行 HTTP 读取和核验。本次队列没有新业务消息；复查只追加核验记录及对应审计，不生成新版本或新链登记。复查报告保存在原目录下的 `rechecks/<id>/`。自动验收的实际状态、摘要、交易编号及记录数量以本次报告和 [验证记录](verification.md) 为准。
+
+## 3. 手动演示顺序
+
+手动操作时启动普通后端：
+
+```bash
+python3 deploy/scripts/run-backend.py --demo --ledger
+```
+
+在 REST Client 的本机用户设置 `rest-client.environmentVariables` 中配置 `ownerAdminPassword`、`operatorAdminPassword`、`operatorUserPassword`，再选择该环境。它们分别对应本机 `.local/demo-credentials.json` 中 `passwords` 对象的 `owner-admin`、`operator-admin`、`operator-user` 值；不要填入受版本控制的 HTTP 文件或工作区设置。使用其他接口工具时，同样通过其本机环境配置传入密码。
+
+打开 [t014.http](../examples/t014.http)，为本轮上传设置一个新的规范 UUID 作为 `clientRequestId`，按编号逐条执行。同一上传重试时保留该 UUID；重新创建任务和上传另一份文件时更换 UUID。
+
+| 演示动作 | 应观察的结果 |
+| --- | --- |
+| 三个账号登录，委托方创建并指派任务 | 任务先为 `DRAFT`，再为 `ASSIGNED`；创建人和运营商管理员成为成员 |
+| 运营商加入上传者、绑定资料项、分配设备并启动 | 初始 `READY` 批次复用原编号变为 `RUNNING`；启动使用最新任务锁版本 |
+| 上传 79 字节样例，再请求完成 | 分片完整登记；完成接口返回 202，不能当作已经定版或上链 |
+| 轮询上传进度，再轮询存证状态 | 先取得 `COMPLETED` 与 `versionId`，再等待 `CONFIRMED` 与首次 `confirmedTxId` |
+| 两机构分别执行 `STORED` 核验 | 实际读取私有对象，分别通过本机构 Gateway 查询，健康原文件得到 `MATCH` |
+| 核验原样副本和修改一个字节的副本 | 分别得到 `MATCH` 和 `MISMATCH`；正式版本、对象及存证状态不变 |
+| 查看核验历史和任务详情 | 结果、原因、执行人和时间已持久化；任务仍 `RUNNING`、复核仍 `PENDING` |
+
+第 14、16 个请求需要重复执行至条件满足，再执行下一步。`VERIFYING` 表示文件处理中；`PENDING`、`SUBMITTED`、`UNKNOWN` 表示存证尚未确认。出现超时时查看状态和私有日志，不通过 SQL 强制改成成功。
+
+修改副本的命令已写在 HTTP 文件中，只在 `.local/` 创建副本，保留 PNG 文件头。`MISMATCH` 是核验成功执行后的业务结果，返回 HTTP 200；文件读取失败、未登记及链查询失败各有独立结果代码，不能统一说成“文件被篡改”。
+
+## 4. 如何核对业务证据
+
+用 `taskId → requirementId/evidenceId → uploadId → versionId → submissionId` 串起同一次操作。自动验收进一步只读检查数据库引用、私有对象实际字节和两机构账本结果，避免只根据接口中的成功标签下结论。
+
+核对的关键关系如下：
+
+- 原样本、正式对象、版本记录和链上登记具有相同 SHA-256；`evidenceId`、版本号和提交机构也对应。
+- 上传会话只关联一个固定版本；同一版本只有一条业务存证记录，首次登记交易编号与账本一致。
+- `FILE_FINALIZE_REQUESTED`、`EVIDENCE_ANCHOR_REQUESTED` 经真实消息链路处理，发布与消费记录对应业务结果。
+- 核验记录保存本次计算的实际摘要及链摘要；修改副本只追加核验和审计，不产生新对象、版本或上链事件。
+
+报告只展示安全业务字段与校验结论。对象键、密码、JWT、私钥和交易检查点原文不应放进面试截图或请求示例。历史故障探针的链外夹具已经清理，继续操作应使用本次保留的版本编号。
+
+## 5. 面试时说明哪些后端能力
+
+可以按一条请求遇到的问题来讲，先展示接口与结果，再展开实现。
+
+| 业务问题 | 已实现的后端处理 |
+| --- | --- |
+| 有角色的人是否可以读所有资料 | 每次读取当前数据库身份；机构、业务角色和显式任务成员共同决定资源权限，核验前后都检查 |
+| 上传重试和并发请求如何避免重复 | 创建会话使用请求编号与元数据指纹；分片使用唯一键和字节摘要；完成冻结后禁止追加，固定版本受会话唯一键约束 |
+| 数据库成功后，消息发送失败怎么办 | 业务状态和 Outbox 同事务提交；事务外发布，结合 publisher confirm 与 mandatory return 判断投递，重复消息使用业务唯一键及消费记录处理 |
+| 上链调用超时是否能直接重试一笔新交易 | 提交前保存原 txId 和交易字节，提交后保存确认请求；不确定时保留 `UNKNOWN`，恢复原交易并查询业务登记 |
+| 如何区分内容变化和依赖故障 | 流式重算实际字节摘要，再查询当前用户所属机构的账本；五种核验结果分别表达匹配、不匹配及不确定原因 |
+| 大文件和慢依赖会不会耗尽服务 | 对象 I/O 位于短事务之外；文件大小、私有暂存、并发和处理期限有界；未退出的超时 Worker 继续占用容量 |
+
+Fabric 在这里负责两个机构对固定版本摘要的共同登记和查询。任务、权限、文件、事务和消息恢复均由 Java 后端实现；先讲清这些可观察的业务行为，再展示链上证据。
+
+## 6. 当前范围
+
+本轮展示单任务、单资料项、单片小图片及真实依赖链路。设备目前是既有演示记录，没有本轮新增的无人机通信、自动飞行或多机调度能力。人工复核和最终验收分别在 T018、T019 实现；共享下载和完整故障矩阵也有后续任务。
+
+摘要一致仅说明核验字节与登记版本一致，不能证明现场采集内容真实。开发网络的两个应用身份由本地后端持有；当前结果不代表生产机构运维隔离或性能压测已经完成。
