@@ -20,7 +20,14 @@
 - T012 业务存证已完成：129 项后端测试、45 次真实 HTTP 联调及 87 项数据库约束通过；两个版本真实上链，确认响应丢失后用原交易恢复成功。
 - T013 文件核验已完成：148 项后端测试、62 次真实 HTTP 联调及 110 项数据库约束通过；原文件/副本比较、五种结果、历史权限及处理中撤销成员均已验证。
 - **T014 已完成，M2 最小真实闭环已通过**：打包应用经正式接口自动完成任务、上传、定版、真实存证和核验；33 次 HTTP 验收及 15 次同版本复查通过，演示成果保留。
-- 下一项为 **T015：设备管理、设备认证和上报**；完整 MVP 继续按任务清单推进。
+- T015 设备管理、独立设备认证及上报已完成：185 项后端测试、79 次真实 HTTP/606 项检查和 129 项数据库约束通过；设备上传、重复事件去重、单调进度及 Redis 故障回源已验证。
+- T016 多机模拟、人工换机和迟到隔离已完成：199 项后端测试、9 项模拟器测试、144 项数据库约束及 84 次真实 HTTP/473 项检查通过；旧批次更大的版本号不会覆盖当前成果。
+- T017 多分片续传与多版本归档已完成：212 项后端测试、20 项 Python 测试、144 项数据库约束和 88 次真实 HTTP/648 项检查通过；两个独立 Java 进程验证续传，旧新版本独立保留，提供通用上传客户端。
+- T018 异常工单与人工复核已完成：版本异常登记/分页、通过/退回与唯一正式结论可用；233 项后端测试、167 项数据库约束和 108 次真实 HTTP/780 项检查通过，新旧版本结论独立于链状态。
+- T019 提交验收与任务完成已完成：262 项后端测试、172 项数据库约束和 132 次真实 HTTP/968 项检查通过；7 个测试版本取得真实 Fabric 有效确认，任务完成条件、并发控制及终态保护均已验证。
+- T020 指定版本共享与受控下载已完成：311 项后端测试、206 项数据库约束和 123 次真实 HTTP/866 项检查通过；共享申请、审批、拒绝、撤销、到期及新旧版本权限隔离已验证，两个版本真实上链。
+- T021 任务审计及业务关系查询已完成：339 项后端测试、206 项数据库约束和 161 次真实 HTTP/1836 项检查通过；审计按真实资源归属分页，版本关联异常、复核、存证、共享与核验摘要，查询不写审计或调用外部服务。
+- **M3 业务补齐已通过**。下一项为 **T022：完善 Outbox、消费幂等及死信处理**，进入 M4 可靠性完善；完整 MVP 继续按任务清单推进。
 
 ## 项目文档
 
@@ -40,6 +47,15 @@
 | [T012 HTTP 示例](examples/t012.http) | 固定版本详情、存证状态、实际交易编号及越权拒绝 |
 | [T013 HTTP 示例](examples/t013.http) | 原文件/相同副本/修改副本核验、历史查询与权限拒绝 |
 | [T014 HTTP 示例](examples/t014.http) | 从登录到任务、上传、异步定版、真实存证和文件核验的完整调用顺序 |
+| [T015 HTTP 示例](examples/t015.http) | 设备登记、独立令牌上报、重复事件、设备上传和启停 CAS |
+| [T016 HTTP 示例](examples/t016.http) | 并发换机、执行历史、当前进度及旧批次历史补传 |
+| [T017 HTTP 示例](examples/t017.http) | 多分片进度、乱序、重试、冻结和多版本归档 |
+| [T018 HTTP 示例](examples/t018.http) | 版本异常登记、分页、人工通过/退回及结论查询 |
+| [T019 HTTP 示例](examples/t019.http) | 提交验收、确认完成、当前批次资格及 completedAt |
+| [T020 HTTP 示例](examples/t020.http) | 指定版本申请、审批、拒绝、撤销、可见版本分页及短期下载 |
+| [T021 HTTP 示例](examples/t021.http) | 按任务分页筛选审计，以及固定版本的业务关系摘要 |
+| [多机模拟器](simulator/README.md) | 3～5 台设备并行、断网重试、持久请求及上传阶段恢复 |
+| [通用续传客户端](simulator/upload.py) | 用户/设备文件上传、私有检查点、查询服务端缺片后继续上传 |
 | [M2 演示说明](docs/m2-demo.md) | 自动验收、保留结果复查和面试演示步骤 |
 | [基础设施说明](deploy/README.md) | 四个业务服务、地址、持久卷及验证命令 |
 | [Fabric 网络说明](deploy/fabric/README.md) | 固定版本、通道创建、证书及保留账本的启停 |
@@ -84,7 +100,7 @@ curl -i -H 'X-Trace-Id: demo-001' http://127.0.0.1:8080/api/v1/system/status
 python3 deploy/scripts/init-env.py
 ```
 
-Spring Boot 从进程环境读取 `SPRING_PROFILES_ACTIVE`、`SERVER_ADDRESS`、`SERVER_PORT`，默认 `local`、`127.0.0.1`、`8080`。它不会自动加载 `.env`，初始化脚本也不会启动服务或切换 JAVA_HOME。后端启动器显式读取 DB_*、S3_*、UPLOAD_*、VERIFICATION_*、RABBITMQ_*、MESSAGING_*、FABRIC_*、JWT_SECRET；保留初始化生成的原凭据和 64 位小写十六进制密钥。对象存储在 T010 接入，T011 接入异步定版及消息，T012 通过 --ledger 显式启用真实业务存证。
+Spring Boot 从进程环境读取 `SPRING_PROFILES_ACTIVE`、`SERVER_ADDRESS`、`SERVER_PORT`，默认 `local`、`127.0.0.1`、`8080`。它不会自动加载 `.env`，初始化脚本也不会启动服务或切换 JAVA_HOME。后端启动器显式读取 DB_*、S3_*、UPLOAD_*、VERIFICATION_*、RABBITMQ_*、MESSAGING_*、FABRIC_*、REDIS_*、DEVICE_*、JWT_SECRET；保留初始化生成的原凭据和 64 位小写十六进制密钥。对象存储在 T010 接入，T011 接入异步定版及消息，T012 通过 --ledger 显式启用真实业务存证，T015 接入设备认证与 Redis 在线状态缓存。
 
 后端固定 Spring Boot 4.1.1，已完成构建、测试及打包启动验证；四个业务服务镜像已通过 T003 验证，Fabric 2.5.16 节点、CLI 和开发通道已通过 T004 验证。Gateway Java 1.13.0 已通过 T006；MyBatis Starter 4.0.0、Flyway 12.4.0 和 Connector/J 9.7.0 已通过 T007，具体状态见验证记录。
 
@@ -100,6 +116,7 @@ python3 deploy/scripts/verify-auth.py
 python3 deploy/scripts/verify-tasks.py
 python3 deploy/scripts/verify-upload.py
 python3 deploy/scripts/verify-pipeline.py
+python3 deploy/scripts/verify-devices.py
 python3 deploy/scripts/run-backend.py --demo
 ```
 
@@ -118,6 +135,8 @@ python3 deploy/scripts/run-backend.py --demo --ledger
 --ledger 追加 ledger profile，连接两个机构客户端并启动上链消费者及恢复扫描。local 为缺少的身份路径读取原 .local/fabric/gateway-paths.json；prod 必须配置明确的身份路径。省略 --ledger 可继续运行上传及消息模式。存证详情和状态查询见 [T012 示例](examples/t012.http)，只有有效账本结果才显示 CONFIRMED；超时保留 UNKNOWN 及原交易检查点。
 
 文件核验及历史查询见 [T013 示例](examples/t013.http)，STORED 实际读取原对象，COPY 比较本次副本且不覆盖原文件。核验并发、文件上限及处理时限可由 VERIFICATION_* 配置。
+
+指定版本共享与受控下载见 [T020 示例](examples/t020.http)。共享只开放获批版本，批准要求复核通过且存证确认；下载地址最长 300 秒且不超过授权期限。使用 `python3 deploy/scripts/verify-sharing.py` 可验证真实审批、下载、到期与撤销边界。
 
 真实探针使用独立业务数据和消息拓扑，结束后清理自己的链外夹具；已提交的测试证据保留在原账本，不重建或清空链网络。
 

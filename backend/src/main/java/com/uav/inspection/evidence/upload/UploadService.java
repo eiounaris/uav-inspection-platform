@@ -10,6 +10,7 @@ import com.uav.inspection.evidence.upload.UploadModels.PartPlan;
 import com.uav.inspection.evidence.upload.UploadModels.PartResult;
 import com.uav.inspection.evidence.upload.UploadModels.UploadProgress;
 import com.uav.inspection.identity.CurrentUser;
+import com.uav.inspection.device.CurrentDevice;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -53,9 +54,35 @@ public class UploadService {
 
     public PartResult uploadPart(CurrentUser actor, String uploadId, int partNo,
                                  InputStream input, long contentLength) {
+        return uploadPart(uploadId, partNo, input, contentLength, new PartAccess() {
+            public PartPlan prepare() { return transactions.preparePart(actor, uploadId, partNo); }
+            public PartResult known(long size, String hash) { return transactions.findIdenticalPart(actor, uploadId, partNo, size, hash); }
+            public PartCommit commit(long size, String hash, String key) { return transactions.storePart(actor, uploadId, partNo, size, hash, key); }
+        });
+    }
+
+    public UploadProgress createDevice(CurrentDevice actor, CreateUploadRequest request) {
+        UploadValidation.request(request, settings);
+        return transactions.createDevice(actor, request, UploadValidation.requestHash(request));
+    }
+
+    public UploadProgress getDevice(CurrentDevice actor, String uploadId) {
+        UploadValidation.id(uploadId);
+        return transactions.getDevice(actor, uploadId);
+    }
+
+    public PartResult uploadDevicePart(CurrentDevice actor, String uploadId, int partNo, InputStream input, long contentLength) {
+        return uploadPart(uploadId, partNo, input, contentLength, new PartAccess() {
+            public PartPlan prepare() { return transactions.preparePartDevice(actor, uploadId, partNo); }
+            public PartResult known(long size, String hash) { return transactions.findIdenticalPartDevice(actor, uploadId, partNo, size, hash); }
+            public PartCommit commit(long size, String hash, String key) { return transactions.storePartDevice(actor, uploadId, partNo, size, hash, key); }
+        });
+    }
+
+    private PartResult uploadPart(String uploadId, int partNo, InputStream input, long contentLength, PartAccess access) {
         UploadValidation.id(uploadId);
         UploadValidation.invalid(partNo < 1 || input == null);
-        PartPlan plan = transactions.preparePart(actor, uploadId, partNo);
+        PartPlan plan = access.prepare();
         if (contentLength >= 0) {
             UploadValidation.exactLength(contentLength, plan.expectedSize());
         }
@@ -63,7 +90,7 @@ public class UploadService {
         try {
             temporary = temporaryFile(plan.expectedSize());
             SpooledPart part = spool(input, temporary, plan);
-            PartResult known = transactions.findIdenticalPart(actor, uploadId, partNo, part.size(), part.sha256());
+            PartResult known = access.known(part.size(), part.sha256());
             if (known != null) {
                 return known;
             }
@@ -72,7 +99,7 @@ public class UploadService {
 
             // A thrown final phase may mean the commit outcome is unknown. Its candidate must remain
             // available for reference-aware recovery/collection; only a normal return can prove a loser.
-            PartCommit committed = transactions.storePart(actor, uploadId, partNo, part.size(), part.sha256(), candidate);
+            PartCommit committed = access.commit(part.size(), part.sha256(), candidate);
             if (committed == null || committed.result() == null || committed.storedObjectKey() == null
                     || committed.storedObjectKey().isBlank()) {
                 throw new BusinessException(ErrorCode.INTERNAL_ERROR);
@@ -163,6 +190,12 @@ public class UploadService {
         } catch (IOException exception) {
             log.warn("An upload temporary file could not be removed.");
         }
+    }
+
+    private interface PartAccess {
+        PartPlan prepare();
+        PartResult known(long size, String hash);
+        PartCommit commit(long size, String hash, String key);
     }
 
     private record SpooledPart(long size, String sha256) { }

@@ -1,6 +1,8 @@
 package com.uav.inspection.config;
 
 import com.uav.inspection.evidence.storage.ObjectStorage;
+import com.uav.inspection.evidence.storage.DownloadUrlSigner;
+import com.uav.inspection.evidence.storage.S3DownloadUrlSigner;
 import com.uav.inspection.evidence.storage.S3ObjectStorage;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -14,6 +16,7 @@ import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import java.net.URI;
 import java.time.Duration;
@@ -56,6 +59,31 @@ public class StorageConfiguration {
     @Bean
     ObjectStorage objectStorage(S3Client s3, Environment environment) {
         return new S3ObjectStorage(s3, required(environment, "bucket"));
+    }
+
+    @Bean(destroyMethod="close")
+    S3Presigner s3Presigner(Environment environment) {
+        try {
+            URI endpoint=URI.create(required(environment,"endpoint"));
+            if(!("http".equals(endpoint.getScheme()) || "https".equals(endpoint.getScheme()))
+                    || endpoint.getHost()==null || endpoint.getUserInfo()!=null || endpoint.getRawQuery()!=null
+                    || endpoint.getRawFragment()!=null || !(endpoint.getPath().isEmpty() || "/".equals(endpoint.getPath()))
+                    || !required(environment,"bucket").matches("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"))
+                throw new IllegalArgumentException();
+            return S3Presigner.builder().endpointOverride(endpoint).region(Region.of(required(environment,"region")))
+                    .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(
+                            required(environment,"access-key"),required(environment,"secret-key"))))
+                    .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(
+                                    environment.getRequiredProperty("inspection.storage.force-path-style",Boolean.class))
+                            .checksumValidationEnabled(false).chunkedEncodingEnabled(false).build()).build();
+        } catch(RuntimeException failure) {
+            throw new IllegalStateException("Invalid local S3 download signing configuration");
+        }
+    }
+
+    @Bean
+    DownloadUrlSigner downloadUrlSigner(S3Presigner presigner,Environment environment) {
+        return new S3DownloadUrlSigner(presigner,required(environment,"bucket"));
     }
 
     private static String required(Environment environment, String name) {

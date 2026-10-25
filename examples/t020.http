@@ -1,0 +1,76 @@
+# T020：申请只返回共享请求元数据，不开放文件。申请者可以不是任务成员；已知固定版本UUID才能申请。
+# 所有JWT和下载响应url只放本地私有REST环境，不提交/打印真实值。
+@baseUrl = http://127.0.0.1:8080/api/v1
+@applicantToken = REPLACE_LOCAL_APPLICANT_JWT
+@approverToken = REPLACE_LOCAL_OWNER_DATA_APPROVER_JWT
+@versionId = REPLACE_FIXED_VERSION_UUID
+@newVersionId = REPLACE_NEW_FIXED_VERSION_UUID
+@taskId = REPLACE_TASK_UUID
+@clientRequestId = REPLACE_STABLE_REQUEST_UUID
+@grantId = REPLACE_GRANT_UUID
+@expectedLockVersion = 0
+@requestedValidUntil = REPLACE_FUTURE_UTC_ISO_INSTANT
+@validUntil = REPLACE_FUTURE_UTC_NOT_AFTER_REQUESTED
+
+### 申请：任何两机构有效注册账号均可，reason非空白且<=1000；期限必须是未来UTC
+# 重试沿用clientRequestId和相同内容；同键不同内容409 IDEMPOTENCY_CONFLICT。
+POST {{baseUrl}}/access-grants
+Authorization: Bearer {{applicantToken}}
+Content-Type: application/json
+
+{"clientRequestId":"{{clientRequestId}}","versionId":"{{versionId}}","reason":"申请此固定版本用于巡检对比","requestedValidUntil":"{{requestedValidUntil}}"}
+
+### 只查看自己的申请元数据；无filename/hash/task详情，不授予任务权限
+GET {{baseUrl}}/access-grants?mine=true&page=1&pageSize=20
+Authorization: Bearer {{applicantToken}}
+
+### 审批队列：OrgA OWNER_DATA_APPROVER并且是该任务成员
+GET {{baseUrl}}/access-grants?taskId={{taskId}}&page=1&pageSize=20
+Authorization: Bearer {{approverToken}}
+
+### 批准：精确版本必须已APPROVED+CONFIRMED；任务无需COMPLETED
+# validUntil必填，未来且不晚于requestedValidUntil；CAS只允许一人决策。
+POST {{baseUrl}}/access-grants/{{grantId}}/decision
+Authorization: Bearer {{approverToken}}
+Content-Type: application/json
+
+{"decision":"APPROVED","validUntil":"{{validUntil}}","expectedLockVersion":{{expectedLockVersion}}}
+
+### 拒绝替代上面的批准，需使用仍PENDING的独立请求；reason必填，不能传validUntil
+POST {{baseUrl}}/access-grants/{{grantId}}/decision
+Authorization: Bearer {{approverToken}}
+Content-Type: application/json
+
+{"decision":"REJECTED","reason":"本次申请不符合用途范围","expectedLockVersion":{{expectedLockVersion}}}
+
+### 已获批且未过期时，只读取这个精确版本；同机构、ORG_ADMIN-only也遵循同一规则
+GET {{baseUrl}}/evidence-versions/{{versionId}}
+Authorization: Bearer {{applicantToken}}
+
+### SQL权限过滤发生在COUNT/LIMIT之前；无授权时列表为200空，详情为403
+GET {{baseUrl}}/evidence-versions?taskId={{taskId}}&page=1&pageSize=20
+Authorization: Bearer {{applicantToken}}
+
+### 不会因旧版授权自动开放新版本或整个任务
+GET {{baseUrl}}/evidence-versions/{{newVersionId}}
+Authorization: Bearer {{applicantToken}}
+
+### 原文件实际核验，COPY请求仍沿用t013 multipart协议；历史也重新检查当前授权
+POST {{baseUrl}}/evidence-versions/{{versionId}}/verifications?source=STORED
+Authorization: Bearer {{applicantToken}}
+
+### 签发短期下载地址，data={url,expiresAt}，Cache-Control:no-store
+# URL有效期<=300秒且不超过授权剩余时间。实际GET地址在本地私密使用，不复制进文档/日志。
+POST {{baseUrl}}/evidence-versions/{{versionId}}/download-url
+Authorization: Bearer {{applicantToken}}
+
+### 撤销：先从mine/task列表读取最新lockVersion，再填写；需仍有效APPROVED
+# 撤销后不再签发新地址；之前已签发URL仍可能在原expiresAt前有效。
+POST {{baseUrl}}/access-grants/{{grantId}}/revoke
+Authorization: Bearer {{approverToken}}
+Content-Type: application/json
+
+{"reason":"用途结束，撤销此精确版本的共享访问","expectedLockVersion":{{expectedLockVersion}}}
+
+# APPROVED到期由数据库时间派生EXPIRED，即使存储状态未重写也立即失权。
+# 完整真实验收：python3 deploy/scripts/verify-sharing.py

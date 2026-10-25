@@ -1,6 +1,8 @@
 package com.uav.inspection.inspection.persistence;
 
 import com.uav.inspection.inspection.TaskModels.ExecutionView;
+import com.uav.inspection.inspection.TaskModels.ExecutionHistoryView;
+import com.uav.inspection.inspection.TaskModels.SubtaskProgress;
 import com.uav.inspection.inspection.TaskModels.RequirementView;
 import com.uav.inspection.inspection.TaskModels.TaskSummary;
 import org.apache.ibatis.annotations.Delete;
@@ -13,7 +15,7 @@ import java.time.Instant;
 import java.util.List;
 
 public interface TaskMapper {
-    String TASK_COLUMNS = "id, owner_org_id, operator_org_id, name, scope, status, created_by, lock_version, created_at, updated_at";
+    String TASK_COLUMNS = "id, owner_org_id, operator_org_id, name, scope, status, created_by, lock_version, created_at, updated_at, completed_at";
     String REQUIREMENT_COLUMNS = "id, evidence_id, task_id, subtask_id, name, required, next_version_no, lock_version";
     String SUBTASK_COLUMNS = "id, task_id, name, current_execution_id, lock_version";
     String EXECUTION_COLUMNS = "id, subtask_id, drone_id, status, progress, started_at, closed_at, lock_version";
@@ -30,7 +32,7 @@ public interface TaskMapper {
 
     @Select("""
             SELECT t.id, t.owner_org_id, t.operator_org_id, t.name, t.scope, t.status, t.created_by,
-                   t.lock_version, t.created_at, t.updated_at
+                   t.lock_version, t.created_at, t.updated_at, t.completed_at
             """ + READ_SCOPE + " ORDER BY t.created_at DESC, t.id DESC LIMIT #{limit} OFFSET #{offset}")
     List<TaskSummary> listVisible(@Param("userId") String userId, @Param("orgId") String orgId,
                                  @Param("ownerRead") boolean ownerRead, @Param("operatorRead") boolean operatorRead,
@@ -64,6 +66,18 @@ public interface TaskMapper {
              WHERE id = #{id} AND lock_version = #{version} AND status = 'ASSIGNED'
             """)
     int startTask(@Param("id") String id, @Param("version") long version);
+
+    @Update("""
+            UPDATE inspection_task SET status='WAITING_ACCEPTANCE',lock_version=lock_version+1
+            WHERE id=#{id} AND status='RUNNING' AND lock_version=#{version}
+            """)
+    int submitAcceptance(@Param("id") String id,@Param("version") long version);
+
+    @Update("""
+            UPDATE inspection_task SET status='COMPLETED',completed_at=UTC_TIMESTAMP(3),lock_version=lock_version+1
+            WHERE id=#{id} AND status='WAITING_ACCEPTANCE' AND lock_version=#{version}
+            """)
+    int completeTask(@Param("id") String id,@Param("version") long version);
 
     @Select("""
             SELECT u.id AS user_id, u.org_id, u.username, CAST(u.roles AS CHAR) AS roles_json
@@ -167,8 +181,91 @@ public interface TaskMapper {
             """)
     int startExecution(@Param("id") String id, @Param("version") long version, @Param("startedAt") Instant startedAt);
 
+    @Select("SELECT UTC_TIMESTAMP(3)")
+    Instant databaseNow();
+
+    @Update("""
+            UPDATE task_execution SET status='CLOSED',closed_at=#{closedAt},lock_version=lock_version+1
+            WHERE id=#{id} AND status='RUNNING' AND lock_version=#{version}
+            """)
+    int closeExecution(@Param("id") String id,@Param("version") long version,@Param("closedAt") Instant closedAt);
+
+    @Insert("""
+            INSERT INTO task_execution(id,subtask_id,drone_id,status,progress,started_at)
+            VALUES(#{id},#{subtaskId},#{droneId},'RUNNING',0,#{startedAt})
+            """)
+    int insertRunningExecution(@Param("id") String id,@Param("subtaskId") String subtaskId,
+                               @Param("droneId") String droneId,@Param("startedAt") Instant startedAt);
+
+    @Update("""
+            UPDATE inspection_subtask SET current_execution_id=#{newExecutionId},lock_version=lock_version+1
+            WHERE id=#{id} AND current_execution_id=#{previousExecutionId} AND lock_version=#{version}
+            """)
+    int replaceCurrentExecution(@Param("id") String id,@Param("previousExecutionId") String previousExecutionId,
+                                @Param("newExecutionId") String newExecutionId,@Param("version") long version);
+
+    @Update("""
+            UPDATE inspection_task SET status='RUNNING',lock_version=lock_version+1
+            WHERE id=#{id} AND lock_version=#{version} AND status IN ('RUNNING','WAITING_ACCEPTANCE')
+            """)
+    int touchAdjustedTask(@Param("id") String id,@Param("version") long version);
+
+    @Insert("""
+            INSERT INTO execution_adjustment(id,task_id,subtask_id,previous_execution_id,new_execution_id,actor_id,reason,created_at)
+            VALUES(#{id},#{taskId},#{subtaskId},#{previousExecutionId},#{newExecutionId},#{actorId},#{reason},#{createdAt})
+            """)
+    int insertAdjustment(AdjustmentRow adjustment);
+
+    @Select("SELECT COUNT(*) FROM task_execution WHERE subtask_id=#{subtaskId}")
+    long countExecutions(@Param("subtaskId") String subtaskId);
+
+    @Select("""
+            SELECT e.id,e.subtask_id,e.drone_id,e.status,e.progress,e.started_at,e.closed_at,e.lock_version,
+                   COALESCE(e.id=s.current_execution_id,FALSE) AS `current`,a.previous_execution_id,a.actor_id AS adjusted_by,
+                   a.reason AS adjustment_reason,a.created_at AS adjusted_at
+            FROM task_execution e JOIN inspection_subtask s ON s.id=e.subtask_id
+                LEFT JOIN execution_adjustment a ON a.new_execution_id=e.id
+            WHERE e.subtask_id=#{subtaskId} ORDER BY e.created_at DESC,e.id DESC LIMIT #{size} OFFSET #{offset}
+            """)
+    List<ExecutionHistoryView> pageExecutions(@Param("subtaskId") String subtaskId,@Param("size") int size,@Param("offset") long offset);
+
+    @Select("""
+            SELECT s.id AS subtask_id,s.name,s.current_execution_id,e.drone_id,e.status AS execution_status,
+                   COALESCE(e.progress,0) AS progress,
+                   (SELECT COUNT(*) FROM task_execution h WHERE h.subtask_id=s.id AND (s.current_execution_id IS NULL OR h.id<>s.current_execution_id)) AS historical_execution_count
+            FROM inspection_subtask s LEFT JOIN task_execution e ON e.id=s.current_execution_id
+            WHERE s.task_id=#{taskId} ORDER BY s.id
+            """)
+    List<SubtaskProgress> subtaskProgress(@Param("taskId") String taskId);
+
+    @Select("""
+            SELECT r.id AS requirement_id,r.evidence_id,r.name,r.required,r.subtask_id,s.current_execution_id,
+                   v.id AS version_id,v.version_no,v.review_status,c.status AS anchor_status,
+                   (SELECT COUNT(*) FROM evidence_version h WHERE h.requirement_id=r.id
+                       AND (s.current_execution_id IS NULL OR h.execution_id<>s.current_execution_id)) AS historical_version_count
+            FROM material_requirement r LEFT JOIN inspection_subtask s ON s.id=r.subtask_id
+                LEFT JOIN evidence_version v ON v.requirement_id=r.id AND v.execution_id=s.current_execution_id
+                    AND v.version_no=(SELECT MAX(latest.version_no) FROM evidence_version latest
+                        WHERE latest.requirement_id=r.id AND latest.execution_id=s.current_execution_id)
+                LEFT JOIN chain_submission c ON c.version_id=v.id
+            WHERE r.task_id=#{taskId} ORDER BY r.id
+            """)
+    List<RequirementProgressRow> requirementProgress(@Param("taskId") String taskId);
+
+    @Select("""
+            SELECT COUNT(*) FROM upload_session u JOIN inspection_subtask s
+                ON s.id=u.subtask_id AND s.task_id=u.task_id AND u.execution_id=s.current_execution_id
+            WHERE u.task_id=#{taskId} AND u.status='VERIFYING'
+            """)
+    long countCurrentVerifyingUploads(@Param("taskId") String taskId);
+
     record MemberRow(String userId, String orgId, String username, String rolesJson) {}
     record CandidateRow(String id, String orgId, String username, String rolesJson, boolean enabled) {}
     record SubtaskRow(String id, String taskId, String name, String currentExecutionId, long lockVersion) {}
     record DeviceRow(String id, String operatorOrgId, boolean enabled) {}
+    record AdjustmentRow(String id,String taskId,String subtaskId,String previousExecutionId,String newExecutionId,
+                         String actorId,String reason,Instant createdAt) {}
+    record RequirementProgressRow(String requirementId,String evidenceId,String name,boolean required,String subtaskId,
+                                   String currentExecutionId,String versionId,Integer versionNo,String reviewStatus,
+                                   String anchorStatus,long historicalVersionCount) {}
 }

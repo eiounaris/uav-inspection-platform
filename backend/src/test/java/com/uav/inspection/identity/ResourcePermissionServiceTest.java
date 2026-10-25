@@ -7,13 +7,11 @@ import com.uav.inspection.identity.persistence.TaskScopeMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.inOrder;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 class ResourcePermissionServiceTest {
     private static final String OWNER = ResourcePermissionService.OWNER;
@@ -67,6 +65,98 @@ class ResourcePermissionServiceTest {
         order.verify(identities).findUserByIdForUpdate(supplied.id());
         order.verify(authentication).authenticate(supplied.id(), supplied.tokenVersion());
         verifyNoInteractions(scopes);
+    }
+
+    @Test
+    void taskMembershipTakesPrecedenceAndDoesNotRequireASharingGrant() {
+        CurrentUser member = user(OPERATOR, Role.OPERATOR_USER);
+        when(scopes.countMembership("task", member.id())).thenReturn(1);
+        assertEquals(new ResourcePermissionService.VersionAccess(true, null, null),
+                service.requireVersion(member, "version", "task", OWNER, OPERATOR, true));
+        verify(scopes, never()).lockGrant(anyString(), anyString());
+        verify(scopes, never()).now();
+    }
+
+    @Test
+    void anOrganizationAdministratorCanReadOnlyAnExplicitlyGrantedVersion() {
+        CurrentUser admin = user(OWNER, Role.ORG_ADMIN);
+        Instant deadline = Instant.parse("2026-10-25T10:05:00Z");
+        when(scopes.grant("version", admin.id())).thenReturn(new TaskScopeMapper.GrantScope("grant", deadline));
+        when(scopes.now()).thenReturn(deadline.minusMillis(1));
+        assertEquals(new ResourcePermissionService.VersionAccess(false, "grant", deadline),
+                service.requireVersion(admin, "version", "task", OWNER, OPERATOR, false));
+        assertForbidden(() -> service.requireVersion(admin, "other-version", "task", OWNER, OPERATOR, false));
+        assertForbidden(() -> service.requireTask(admin, "task", OWNER, OPERATOR, null));
+        verify(scopes, never()).countMembership(anyString(), anyString());
+    }
+
+    @Test
+    void aWriteUsesTheLockedGrantAndChecksDatabaseTimeAfterTheLockWait() {
+        CurrentUser outsider = user(OPERATOR, Role.OPERATOR_USER);
+        Instant deadline = Instant.parse("2026-10-25T10:05:00Z");
+        when(scopes.lockGrant("version", outsider.id())).thenReturn(new TaskScopeMapper.GrantScope("grant", deadline));
+        when(scopes.now()).thenReturn(deadline.minusSeconds(1));
+        service.requireVersion(outsider, "version", "task", OWNER, OPERATOR, true);
+        var order = inOrder(scopes);
+        order.verify(scopes).lockGrant("version", outsider.id());
+        order.verify(scopes).now();
+        verify(scopes, never()).grant(anyString(), anyString());
+    }
+
+    @Test
+    void aGrantThatExpiresDuringTheLockWaitIsRejected() {
+        CurrentUser outsider = user(OPERATOR, Role.OPERATOR_USER);
+        Instant deadline = Instant.parse("2026-10-25T10:05:00Z");
+        when(scopes.lockGrant("version", outsider.id())).thenReturn(new TaskScopeMapper.GrantScope("grant", deadline));
+        when(scopes.now()).thenReturn(deadline);
+        assertForbidden(() -> service.requireVersion(outsider, "version", "task", OWNER, OPERATOR, true));
+    }
+
+    @Test
+    void revocationRemovesTheGrantPathEvenIfTheCallerStillHasABusinessRole() {
+        CurrentUser outsider = user(OPERATOR, Role.OPERATOR_USER);
+        assertForbidden(() -> service.requireVersion(outsider, "version", "task", OWNER, OPERATOR, true));
+        verify(scopes).lockGrant("version", outsider.id());
+    }
+
+    @Test
+    void managingAndReviewingMembersCanReadTaskHistoryInTheirOwnOrganization() {
+        for (Role role : List.of(Role.OWNER_TASK_ADMIN, Role.OWNER_REVIEWER, Role.OWNER_DATA_APPROVER)) {
+            CurrentUser actor = user(OWNER, role);
+            when(scopes.countMembership("task", actor.id())).thenReturn(1);
+            service.requireTaskHistory(actor, "task", OWNER, OPERATOR);
+        }
+        CurrentUser operator = user(OPERATOR, Role.OPERATOR_TASK_ADMIN);
+        when(scopes.countMembership("task", operator.id())).thenReturn(1);
+        service.requireTaskHistory(operator, "task", OWNER, OPERATOR);
+    }
+
+    @Test
+    void aTaskOperatorOrOrganizationAdministratorDoesNotReceiveTaskWideHistory() {
+        for (CurrentUser actor : List.of(user(OPERATOR, Role.OPERATOR_USER),
+                user(OPERATOR, Role.ORG_ADMIN), user(OWNER, Role.ORG_ADMIN))) {
+            assertForbidden(() -> service.requireTaskHistory(actor, "task", OWNER, OPERATOR));
+        }
+        verifyNoInteractions(scopes);
+    }
+
+    @Test
+    void aVersionGrantCannotReplaceTaskMembershipForHistory() {
+        CurrentUser actor = user(OWNER, Role.OWNER_REVIEWER);
+        when(scopes.grant("version", actor.id())).thenReturn(
+                new TaskScopeMapper.GrantScope("grant", Instant.MAX));
+        assertForbidden(() -> service.requireTaskHistory(actor, "task", OWNER, OPERATOR));
+        verify(scopes, never()).grant(anyString(), anyString());
+        verify(scopes, never()).lockGrant(anyString(), anyString());
+    }
+
+    @Test
+    void losingMembershipOrUsingAnotherTasksOrganizationsRemovesHistoryAccess() {
+        CurrentUser actor = user(OWNER, Role.OWNER_DATA_APPROVER);
+        when(scopes.countMembership("task", actor.id())).thenReturn(1, 0);
+        service.requireTaskHistory(actor, "task", OWNER, OPERATOR);
+        assertForbidden(() -> service.requireTaskHistory(actor, "task", OWNER, OPERATOR));
+        assertForbidden(() -> service.requireTaskHistory(actor, "task", OPERATOR, OPERATOR));
     }
 
     private static CurrentUser user(String orgId, Role role) {

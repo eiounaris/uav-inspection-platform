@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 | --- | --- |
 | 目标版本 | MVP（首版可演示版本） |
-| 更新日期 | 2026-10-23 |
+| 更新日期 | 2026-10-25 |
 | 需求依据 | [01-requirements.md](01-requirements.md) |
 | 架构 | Spring Boot 模块化单体，数据库作为业务状态的权威来源 |
 | Fabric 范围 | 两个业务组织、一个通道、一份链码、两个业务操作 |
@@ -89,7 +89,7 @@ T008 使用 Spring Security Resource Server 与 Nimbus 实现 JWT。JWT_SECRET �
 
 登录只接受 username/password，错误密码、不存在或停用账号统一 401；密码按 UTF-8 字节限制为 72，超过限制返回 400。角色请求只接受 roles/expectedLockVersion；未知字段、空/重复/未知角色或机构不适用角色返回 400。无管理员权限、跨机构或不可管理目标统一 403，版本冲突返回 409。更新成功同时递增目标账号 token_version 和 lock_version；角色与权限始终以数据库当前值为准。退出仅按本次请求的原 tokenVersion 条件更新，递增两个版本，使该版本的所有令牌失效；延迟退出不会撤销后来签发的新版本令牌。
 
-认证过滤器与业务控制器都使用统一错误结构及 traceId。账号数据库不可用返回 503 并拒绝业务访问；401 携带固定 WWW-Authenticate: Bearer，不回传 JWT 校验原文。未启用 database 的独立 HTTP/Gateway 模式只提供基础能力，业务控制器不注册；启用 database 后除状态与登录入口外请求均需认证。T009 已接入任务成员权限；文件版本及共享权限随对应业务任务扩展。
+认证过滤器与业务控制器都使用统一错误结构及 traceId。账号数据库不可用返回 503 并拒绝业务访问；401 携带固定 WWW-Authenticate: Bearer，不回传 JWT 校验原文。未启用 database 的独立 HTTP/Gateway 模式只提供基础能力，业务控制器不注册；启用 database 后除状态与登录入口外请求均需认证。T009 接入任务成员权限，文件版本及核验随后接入任务路径，T020 补齐指定版本的共享授权路径。
 
 ### 3.2 两条资源访问路径
 
@@ -98,7 +98,7 @@ T008 使用 Spring Security Resource Server 与 Nimbus 实现 JWT。JWT_SECRET �
 
 统一 ResourcePermissionService 执行以上判断。列表查询在 SQL 中按任务成员或授权过滤，分页前完成过滤；详情、预览、下载、核验再次检查同一规则。
 
-T009 已实现任务路径：创建者必须为 OrgA 的 OWNER_TASK_ADMIN；读任务需有本机构适用业务角色和显式成员关系，ORG_ADMIN 单独不能读取任务。修改前锁定任务、重读并锁定当前账号，重新校验 enabled、tokenVersion、机构、业务角色和成员关系。MyBatis 使用 STATEMENT 缓存范围，避免同一事务的权限重查复用旧行。无权限和不存在的任务/子任务统一返回 403；有业务角色但没有成员关系的用户列表为空，ORG_ADMIN-only 列表返回 403。共享路径和文件接口在后续任务接入。
+T009 已实现任务路径：创建者必须为 OrgA 的 OWNER_TASK_ADMIN；读任务需有本机构适用业务角色和显式成员关系，ORG_ADMIN 单独不能读取任务。修改前锁定任务、重读并锁定当前账号，重新校验 enabled、tokenVersion、机构、业务角色和成员关系。数据库事务使用 READ_COMMITTED，MyBatis 使用 STATEMENT 缓存范围，锁等待后的权限重读不复用旧快照或旧缓存。无权限和不存在的任务/子任务统一返回 403；有业务角色但没有成员关系的用户任务列表为空，ORG_ADMIN-only 任务列表返回 403。T020 接入指定版本的共享路径，不改变任务接口的成员要求。
 
 创建任务时将创建人加入任务成员。委托方管理员指派本机构复核、审批成员，通过任务分配操作加入运营商任务管理员；运营商管理员可指派本机构操作人员，不能添加委托方成员或更改委托方验收要求。成员维护接口只替换调用者有权管理的本机构成员，必须保留其他机构成员和任务创建人，不能将 userIds 解释为整个任务的全量成员替换。
 
@@ -109,6 +109,18 @@ T009 已实现任务路径：创建者必须为 OrgA 的 OWNER_TASK_ADMIN；读�
 设备使用独立的随机设备令牌，数据库仅保存其摘要；设备标识与令牌一并校验。设备接口不接受用户 JWT 充当设备身份，也不允许设备调用复核、共享或用户管理接口。
 
 每次模拟器启动生成 bootId，上报包含 eventId、seq、executionId。服务端以接收时间计算在线状态，以设备身份和执行批次校验上报范围。
+
+T015 使用独立设备 SecurityFilterChain，设备接口位于 `/api/v1/device/**`，同时校验 `X-Device-Id`（规范小写 UUID）和 `X-Device-Token`（32 字节随机值的 64 位小写十六进制编码）。用户 JWT 不能代替设备凭据；用户接口仍只接受用户 JWT。每次设备请求读取当前数据库启用状态并常量时间比较令牌摘要，写事务取得设备行锁后再次校验原凭据，禁用设备后原令牌立即不可用。设备身份不能访问用户、角色、版本查询、核验、复核和共享接口。
+
+运营商 `OPERATOR_TASK_ADMIN` 可登记、分页查看和启停本机构设备，`ORG_ADMIN` 单独不具备设备管理权限。登记只接受 code，机构、编号、令牌由服务端生成；首次响应包含 device 和 deviceToken，后续读取不返回令牌或摘要。启停使用 expectedLockVersion，变更与 USER 审计同事务；心跳也递增设备版本，管理员提交前应使用最新版本。
+
+`POST /api/v1/device/reports` 接收 bootId、seq、eventId、executionId、type、progress。type 仅 HEARTBEAT/PROGRESS；前者 progress 必须为空，后者为 0～100 整数。seq 为 0～9007199254740991 的整数，避免客户端 JSON 整数精度丢失。服务端依次锁定任务、子任务、执行批次和设备，检查机构及该批次分配设备。新报告要求任务为 RUNNING/WAITING_ACCEPTANCE，执行为当前 RUNNING 或原非当前 CLOSED 批次；后者只记录历史事件和原设备在线时间，不改变任何执行进度。READY、不一致批次及已完成任务拒绝新报告。
+
+V8 追加 device_event，唯一 `(drone_id, boot_id, seq)` 和 `(drone_id, event_id)`，并通过 `(execution_id, drone_id)` 复合外键固定设备批次归属。事件保存完整请求指纹、数据库 UTC received_at 和当时 applied_progress；同键同请求返回原 id、receivedAt、executionProgress，并标记 duplicate=true，不再次刷新心跳、增加进度或写成功审计。同键不同内容返回 409 IDEMPOTENCY_CONFLICT。不同序号乱序到达时只将进度取最大值，新 bootId 可以从 seq=0 开始，事件历史仍保留。上报进度达到 100% 不改变任务状态或成果验收结论。
+
+成功新事件、最近接收时间、执行进度和 DEVICE 审计在同一事务提交。默认连续 20 秒没有新报告为离线，恰好到达阈值时已离线；不采信设备提供的采集时间。提交后才尽力写入带 TTL 的 Redis 毫秒时间缓存，Lua 取最大值避免延迟旧写覆盖新值。设备详情仍读取数据库身份和元数据，缓存缺失、异常、过旧或无对应数据库事实时用数据库接收时间并尝试重建，不让缓存制造在线状态；Redis 失败不回滚已提交事件。
+
+设备上传通过 `/api/v1/device/upload-sessions` 提供与操作员相同的会话创建、进度、单片及完成能力，凭据及会话所有者均为设备。复用文件处理和 Outbox，事务检查原执行所属设备，I/O 后重新校验设备启用状态，固定版本保存 uploader_drone_id；不会将设备伪装为用户或授予用户业务角色。完成接口仍要求 messaging profile。T016 允许原设备向非当前 CLOSED 批次补传，资料始终固定在原批次；新设备无权取得旧设备会话，重复报告仍返回原受理快照且不刷新在线时间。
 
 ### 3.4 Fabric 身份
 
@@ -145,6 +157,7 @@ Gateway 按机构配置并复用连接，机构证书和私钥分别挂载。服
 | material_requirement | id、evidence_id、task_id、subtask_id、name、required、next_version_no | evidence_id 唯一；启动前 subtask_id 可空，启动时必须绑定同任务子任务；next_version_no 在定版事务中递增 |
 | drone | id、operator_org_id、code、token_hash、enabled、last_seen_at、lock_version | code 唯一；归属 OrgB |
 | task_execution | id、subtask_id、drone_id、status、started_at、closed_at、progress | 批次不可复用；状态 READY/RUNNING/CLOSED |
+| execution_adjustment | id、task_id、subtask_id、previous_execution_id、new_execution_id、actor_id、reason、created_at | 每次换机保留原批次、新批次、操作者及原因；前后批次必须属于同一子任务 |
 | device_event | id、drone_id、boot_id、seq、execution_id、event_type、received_at | 唯一 (drone_id, boot_id, seq)，防止重复计数 |
 
 委托方创建草稿任务及必交要求；运营商在已分配阶段拆分子任务并绑定资料项。必交项的内容由委托方维护，运营商不能删除或降低要求。开始执行前检查所有资料项已绑定子任务，之后冻结资料要求，首版不提供执行中修改验收清单的流程。
@@ -167,7 +180,7 @@ verify 已实际验证 24 项唯一键、角色及机构白名单、外键、摘
 
 #### 4.2.2 T008 身份审计迁移
 
-T008 追加 `V2__identity_audit.sql` 建立 audit_log，保留已应用的 V1 及其 checksum=-539134757。审计记录包含操作者、机构、动作、资源编号、traceId、结果及 UTC 时间；actor_id/resource_id 为多态编号，不建立到 app_user 的外键，org_id 保留机构外键。应用 Mapper 只暴露 INSERT，查询接口由 T021 实现。
+T008 追加 `V2__identity_audit.sql` 建立 audit_log，保留已应用的 V1 及其 checksum=-539134757。审计记录包含操作者、机构、动作、资源编号、traceId、结果及 UTC 时间；actor_id/resource_id 为多态编号，不建立到 app_user 的外键，org_id 保留机构外键。写入 Mapper 只暴露 INSERT，T021 通过独立只读 Mapper 提供按任务查询，不提供更新或删除审计的接口。
 
 登录成功、实际生效的退出及角色修改分别记录 AUTH_LOGIN、AUTH_LOGOUT、USER_ROLES_CHANGED。角色更新和退出的审计与版本更新处于同一数据库事务，失败回滚不会留下成功审计。只记录安全元数据，不保存密码、BCrypt 摘要、JWT、请求正文或完整响应。应用日志关闭认证请求和响应的 HTTP 诊断输出；数据库异常仅记录类型。该设计不声称数据库管理员无法修改审计记录。
 
@@ -192,9 +205,9 @@ T009 追加 `V3__task_execution_scope.sql` 建立 inspection_subtask、material_
 | upload_session | id、task_id、subtask_id、requirement_id、evidence_id、execution_id、actor_type、actor_id、client_request_id、request_hash、filename、content_type、expected_size、part_size、part_count、status、expires_at、lease_token、lease_until、retry_count、next_action_at、last_error、lock_version | 唯一 (actor_type, actor_id, client_request_id)，相同请求内容才可复用 |
 | upload_part | session_id、part_no、size、sha256、object_key | 唯一 (session_id, part_no)，一个分片只接纳一种内容 |
 | evidence_version | id、requirement_id、evidence_id、version_no、execution_id、upload_session_id、uploader_user_id、uploader_drone_id、submitter_org_id、object_key、size、sha256、review_status、created_at | 唯一 (evidence_id, version_no)、upload_session_id；出生即为校验完成的固定版本 |
-| issue | id、task_id、evidence_version_id、description、created_by、created_at | 异常关联具体版本，不修改原文件 |
-| review_record | id、evidence_version_id、decision、reason、reviewer_id、created_at | evidence_version_id 唯一；一版只形成一次正式复核结论 |
-| access_grant | id、version_id、applicant_id、client_request_id、request_hash、status、reason、requested_valid_until、approver_id、valid_until、revoked_at、lock_version | 唯一 (applicant_id, client_request_id)；同键不同请求拒绝；一条记录承载申请与获批授权 |
+| issue | id、task_id、evidence_version_id、description、created_by、created_at | 描述 1～4000 字；版本与任务复合外键；同一版本可有多条异常，不修改原文件 |
+| review_record | id、evidence_version_id、decision、reason、reviewer_id、created_at | evidence_version_id 唯一；一版只形成一次正式复核结论；退回原因必填，最多 1000 字 |
+| access_grant | id、version_id、applicant_id、client_request_id、request_hash、status、reason、requested_valid_until、approver_id、decision_reason、decided_at、valid_until、revoked_by、revoke_reason、revoked_at、lock_version、created_at、updated_at | 唯一 (applicant_id, client_request_id)；同键不同请求拒绝；一条记录承载申请与获批授权，保留决定和撤销事实 |
 | verification_record | id、version_id、user_id、source、actual_sha256、ledger_sha256、actual_size、ledger_tx_id、result、reason、verified_at | source 为 STORED/COPY；副本不产生证据版本 |
 | audit_log | id、actor_type、actor_id、org_id、action、resource_type、resource_id、trace_id、result、created_at | 追加记录，不记录密码、令牌、私钥或完整下载地址 |
 
@@ -208,7 +221,7 @@ T010 追加 V4__upload_sessions_and_versions.sql 建立 upload_session、upload_
 
 上传 API 同时启用 database、storage profiles。启动器读取既有 S3_*、UPLOAD_* 参数；database-only 的认证、任务及数据库探针保持独立。S3 使用静态凭据、显式 endpoint/region、路径式访问，不调用建桶或公开 ACL。Garage 配置禁用 SDK 分块编码，校验和策略为 WHEN_REQUIRED，业务 SHA-256 独立计算，不把 ETag 当作文件摘要。允许类型、文件上限、分片大小、24 小时会话期及私有临时目录可配置；分片至少 8 字节、会话期最多 7 天，最大文件对应分片数不超过 10000。
 
-用户上传要求 OrgB、OPERATOR_USER、显式任务成员及会话所有者同时成立，OPERATOR_TASK_ADMIN 单独不能代替操作员权限。创建新会话只接受当前 RUNNING 批次及 RUNNING/WAITING_ACCEPTANCE 任务；完成任务禁止写入。设备身份和旧批次历史补传由 T015/T016 接入。GET 及同请求重试仍检查当前身份、任务权限和所有者，可以查看过期/冻结会话；同键不延长原 expiresAt。
+用户上传要求 OrgB、OPERATOR_USER、显式任务成员及会话所有者同时成立，OPERATOR_TASK_ADMIN 单独不能代替操作员权限。任务为 RUNNING/WAITING_ACCEPTANCE 时，接受当前 RUNNING 批次上传；T016 也允许当前仍具权限的操作员向原非当前 CLOSED 批次补传历史资料。设备路径另要求原分配设备及设备会话所有权。完成任务禁止写入。GET 及同请求重试仍检查当前身份、任务权限和所有者，可以查看过期/冻结会话；同键不延长原 expiresAt。
 
 创建请求固定 clientRequestId、requirementId、executionId、filename、contentType 和 size。clientRequestId 为客户端生成并在重试间保持的规范 UUID；请求摘要对其余字段使用长度前缀编码后计算 SHA-256。文件名仅作元数据，拒绝路径分隔符与控制字符；扩展名须与声明 MIME 一致。相同用户及请求编号、相同内容返回原会话，不同内容返回 IDEMPOTENCY_CONFLICT/409。
 
@@ -301,6 +314,14 @@ MySQL 业务事务使用 READ COMMITTED。影响任务验收的操作统一先�
 
 首版换机后，新批次重新提交该子任务全部必交资料，不实现跨批次自动合并验收。任务执行进度和成果验收进度分别显示，进度上报不能直接完成任务。
 
+T016 沿用 `POST /subtasks/{id}/executions`：首次分配保持 ASSIGNED → READY；运行中换机要求 OrgB 的 OPERATOR_TASK_ADMIN、任务成员、最新子任务 expectedLockVersion，以及 1～1000 字非空白 reason。旧设备可以已停用，新设备必须启用且不同于旧设备。事务依次锁任务、当前账号、子任务、旧执行和按编号排序的设备；关闭原 RUNNING、创建新 UUID 的 RUNNING（进度 0）、CAS 切换当前指针并增加任务/子任务版本、写调整及 EXECUTION_ADJUSTED 审计，原关闭和新开始共用数据库 UTC 时间。WAITING_ACCEPTANCE 回到 RUNNING；并发陈旧版本返回 409，外部 I/O 不进入该事务。
+
+V9 只新增 execution_adjustment，复合外键固定前后执行与任务/子任务，前驱和后继分别唯一，允许 A → B → C；外键均为 RESTRICT，不改写旧表数据。`GET /subtasks/{id}/executions` 按执行创建时间及编号倒序分页，包含当前标记、调整人/原因/时间。`GET /tasks/{id}/progress` 同时返回各当前批次进度、平均进度、每项当前版本、缺失必交编号和历史版本数；两接口在任务锁后重验当前用户权限，历史查询也需当前任务权限。
+
+汇总 SQL 先限定 `execution_id=current_execution_id` 再取资料项最大 version_no，迟到旧批次 v4 不能覆盖新当前 v3。present 表示已有固定文件；acceptanceReady 另要求 APPROVED 且 CONFIRMED，实际任务验收及终态检查见下文 T019。旧批次在换机前已进入 VERIFYING 的工作可继续定版，仍保留原 executionId/设备来源；历史定版不会重新打开 WAITING_ACCEPTANCE 任务。
+
+`simulator/swarm.py` 使用 Python 标准库，配置 3～5 台设备并行调用真实设备接口。状态持久化到私有 `.local/` 目录，失败请求保存原 bootId/seq/eventId/clientRequestId 和上传阶段，重启先重试待确认请求，再用新 bootId 从 seq=0 开始。可配置断网周期、重复报告、进度和上传间隔；complete 返回 202 只表示已接纳，定版由后端异步执行。配置和状态说明见 [模拟器说明](../simulator/README.md)。
+
 ### 6.2 分片上传与文件定版
 
 首版采用后端接收业务分片、对象存储保存分片的方案，不向客户端开放对象写入凭证。
@@ -314,6 +335,14 @@ MySQL 业务事务使用 READ COMMITTED。影响任务验收的操作统一先�
 
 最终对象键采用 evidence-files/{sessionId}/{processingToken}，每次处理尝试使用新 token，分片也使用唯一尝试键。数据库唯一 upload_session_id 决定只有一个正式版本；失去租约的 Worker 不得提交结果，产生的对象稍后回收。
 
+T017 复用上述会话和分片表，不新增迁移或第二套上传接口。任意合法 partNo 可以先上传，GET 的 uploadedParts 始终按编号排序，包含每片实际大小和 SHA-256；客户端以 1～partCount 减去已收编号计算缺片，并核对已有片与本地相同偏移的字节摘要。uploadedSize 是数据库已登记分片的字节总数，不能用“最大已收片号”推导上传进度。
+
+partSize、partCount、size 和 expiresAt 在创建时固定。客户端或后端重启后仍按原会话规格续传，不能以重启后的分片配置重新切割旧会话，也不能通过重试延长有效期。新会话按当前大小、类型、分片大小和期限配置校验；已知 uploadId 的恢复先 GET 原会话。同一会话已冻结为 VERIFYING 时，即使重传相同分片也不再写入；重复完成只返回原处理进度或原 versionId。
+
+`simulator/upload.py` 提供通用文件续传客户端，使用本地私有配置读取用户或设备凭据，发送创建请求前持久化 clientRequestId、文件完整摘要及作用域。状态文件不保存令牌和对象引用；创建响应丢失后复用原请求键，已有 uploadId 时从服务端进度恢复，原文件变化则拒绝复用状态。`--max-parts` 可在指定数量的新片上传后停止，再次运行同一配置只补缺片。HTTP 202 只代表完成请求已接纳，是否定版仍以 GET 的 COMPLETED/versionId 为准。
+
+完整文件校验逐片重算长度和摘要，再计算整体摘要；非首片损坏也不能生成版本。文件格式由完整文件验证器检查，图片和 PDF 必测，MP4 作为普通文件归档，不执行转码或内容识别。每次更正创建新会话和新的 clientRequestId，保留旧版对象及摘要；新版本的复核和存证从 PENDING 开始。人工复核结论和共享授权的具体业务在 T018、T020 实现。
+
 文件已保存而数据库事务失败时，恢复程序检查是否已有该会话的正式版本：有则返回原结果；没有则重新领取并处理。清理只删除超过保留期、没有数据库引用且没有有效处理租约的临时或孤立对象，不删除正式版本。
 
 ### 6.3 人工复核与任务验收
@@ -324,6 +353,26 @@ MySQL 业务事务使用 READ COMMITTED。影响任务验收的操作统一先�
 - 提交验收要求每项必交资料已有当前批次就绪版本；复核或存证未完成时可进入待验收，但不能确认完成。
 - 确认完成重新检查全部条件，按查询得到的实际版本决定结果，不采信页面进度、缓存计数或客户端传入的验收通过标记。
 
+T018 通过 V10__issues_and_reviews.sql 追加 issue 和 review_record。evidence_version 仅增加 `(id, task_id)` 唯一键以支持异常的复合作用域外键，既有 review_status 和 lock_version 继续使用；不重写旧迁移或原业务行。异常创建人和复核人均引用真实用户，历史外键采用 RESTRICT。异常可以多次登记，正式复核记录在每个版本上唯一，生产接口不提供修改或删除已有结论的操作。
+
+`POST /issues` 仅允许 OrgB 的 OPERATOR_USER 且为任务成员，提交 versionId 和非空白 description；机构管理员或任务管理员单独不具备该权限。登记异常不会自动撤销既有复核结果。`GET /evidence-versions/{id}/issues` 按 createdAt、id 升序分页，返回 items、page、pageSize、total；读取仍要求当前有效身份、本机构业务角色和任务成员关系。
+
+`POST /evidence-versions/{id}/review` 仅允许 OrgA 的 OWNER_REVIEWER 且为任务成员，输入 decision=APPROVED/RETURNED、expectedReviewStatus=PENDING，以及 reason。RETURNED 必须有非空白原因；APPROVED 的原因可为空，提供时也需为 1～1000 字非空白文本。先锁父任务，再锁并重新验证账号权限，随后锁版本，以 PENDING 和版本锁号条件更新状态，插入正式结论及 EVIDENCE_REVIEWED 审计，同事务提交。并发或重复复核返回 409 VERSION_CONFLICT，审计失败时结论和状态一并回滚。异常创建与 ISSUE_CREATED 审计也使用同一事务，日志和审计不保存描述或原因正文。
+
+`GET /evidence-versions/{id}/review` 返回 versionId、reviewStatus 和 review；尚未复核时 review=null，已复核时包含决定、原因、人员和数据库 UTC 时间。异常和复核读取也按父任务、当前账号、版本的顺序锁定，避免成员或角色撤销与读取交错。任务完成后仍可按现有权限读历史，新增异常和复核均返回 409 TASK_COMPLETED。
+
+复核只需要 database profile，不调用对象存储、消息队列或 Fabric，也不要求存证先确认。历史版本及历史批次可独立复核；仅当退回的是当前执行批次该资料项最新固定版本时，WAITING_ACCEPTANCE 才回到 RUNNING 并增加任务锁号。查询必须先限定 currentExecutionId 再选最大版本号，历史退回不能重开当前任务。补充版本始终从 PENDING 开始，原结论和原文件保留；提交验收和最终完成接口见下述 T019 实现。
+
+T019 提供 `POST /tasks/{id}/submit-acceptance` 和 `POST /tasks/{id}/complete`，正文均为 expectedLockVersion，返回扁平任务详情。前者要求 OrgB 的 OPERATOR_TASK_ADMIN 且为任务成员，状态从 RUNNING 进入 WAITING_ACCEPTANCE；后者要求 OrgA 的 OWNER_TASK_ADMIN 且为任务成员，状态从 WAITING_ACCEPTANCE 进入 COMPLETED。机构管理员、操作员或复核角色单独不具备这些操作权限。两个事务均先锁父任务，再锁并重验当前账号与成员关系，校验版本号及状态后条件更新，与 TASK_ACCEPTANCE_SUBMITTED/TASK_COMPLETED 审计同事务提交；重复、陈旧版本或并发落败均返回 409。
+
+提交和完成都重新检查：至少一个子任务、每个子任务至少一个必交资料项、全部资料已绑定本任务子任务，且各子任务有属于自身的当前 RUNNING 批次。每个必交项必须有当前执行范围内的最新固定版本。提交允许该版本仍待复核或待存证；完成还要求这些版本全部 APPROVED、CONFIRMED，并且不存在任何当前批次的 VERIFYING 上传，包括可选资料。检查不依赖设备是否在线、是否启用或上报进度是否达到 100%，使用数据库中已固定的成果与结论。
+
+资格查询先按 currentExecutionId 限定范围，再选择该资料项的最大 versionNo；历史批次的大版本号、历史复核结论和历史 VERIFYING 不参与当前验收。UPLOADING 草稿不阻止完成。新当前版本定版、当前最新版本被退回或人工换机，会使 WAITING_ACCEPTANCE 回到 RUNNING；旧版或旧批次的迟到结果不重开当前任务。所有这些操作遵守同一个父任务锁顺序，文件及 Fabric RPC 留在事务之外。确认完成只读取已由真实存证流程确认的本地状态，不在任务锁内调用链网络。
+
+完成事务使用 V1 已有的 completed_at 写入数据库 UTC 毫秒时间，并只写一次；任务详情和列表增加 completedAt，非终态时为 null。本轮复用原有列和状态配对 CHECK，不新增迁移或修改旧迁移。完成后禁止换机、修改验收要求、新建或继续写入上传、接纳新的上传定版，以及新增异常或复核。完成前已经 VERIFYING 的历史上传在最终事务发现任务完成时转为失败，不能生成新正式版本。已受理报告或已冻结/完成上传的重复请求可以返回原处理结果，不新增内容、事件或心跳。
+
+任务完成后，现有权限下的详情、版本、异常、复核及文件核验仍可读取。成员管理保留，用于撤销历史访问；撤销成员后原用户立即失去对应读取权限。修改成员不会更改 completedAt 或重新打开任务。
+
 ### 6.4 共享、撤销与下载
 
 1. 申请人按指定版本提交申请，系统仅记录申请，不返回正文、文件名或对象地址。
@@ -333,6 +382,14 @@ MySQL 业务事务使用 READ COMMITTED。影响任务验收的操作统一先�
 5. 任务路径的下载地址最长同样为 300 秒。任务成员资格或授权撤销后停止签发新地址，已签发地址可能使用至到期。
 
 短期地址在服务端本地签名，返回内容包含 expiresAt，不在普通列表中缓存。签发成功不能记录为下载成功；首版不要求额外采集对象存储下载访问日志。
+
+T020 使用 V11__version_access_grants.sql 追加 access_grant，保留 V1～V10 和原业务数据。两机构的有效注册账号可按已知固定版本申请，携带规范 UUID clientRequestId、versionId、1～1000 字非空白 reason 和 requestedValidUntil。申请响应及申请列表仅包含申请、审批和撤销元数据，不返回文件名、任务正文、摘要或对象地址。幂等键绑定申请人和请求内容，相同重试返回原申请，变更版本、原因或期限返回 409 IDEMPOTENCY_CONFLICT。
+
+审批及撤销要求 OrgA 的 OWNER_DATA_APPROVER 且为该版本所属任务成员；按父任务、当前账号、授权行加锁。决定携带 APPROVED/REJECTED、expectedLockVersion，批准还需 validUntil，拒绝必须提供 reason；批准期限必须晚于数据库当前时间且不超过申请期限。固定版本须人工复核 APPROVED、存证 CONFIRMED，任务本身可仍为 RUNNING。撤销必须提供原因和最新锁版本。业务状态、数据库 UTC 时间、锁版本及 ACCESS_GRANT_REQUESTED/APPROVED/REJECTED/REVOKED 审计同事务提交。重复决定、陈旧锁号及对已过期授权的撤销返回 409；APPROVED 到期后响应派生为 EXPIRED，数据库无需定时更新状态。
+
+ResourcePermissionService.requireVersion 先判断任务路径，再检查精确 versionId/applicantId 的有效授权。GET /evidence-versions 支持可选 taskId、requirementId 及 page/pageSize（默认 1/20，上限 100），SQL 在计数和分页前按成员或授权过滤，使用同一数据库时间；无可见版本返回空列表。列表返回安全元数据、anchorStatus 和 confirmedTxId，详情、anchor、STORED/COPY 核验及核验历史复用同一权限规则；单版本授权不开放任务详情、成员、异常或复核管理接口，也不开放其他版本。
+
+POST /evidence-versions/{id}/download-url 在任务、账号及必要授权锁内重验权限，按数据库剩余时间向下取整计算签名秒数，使用固定数据库 UTC 秒时钟在本地生成 S3 GET 签名。实现核对实际 X-Amz-Date/X-Amz-Expires，返回的 expiresAt 不晚于授权期限；签名后再次读取数据库时间，已过期则拒绝。响应设置 Cache-Control: no-store。签名、URL_ISSUED 审计及响应处于同一短事务，不发起网络请求；SDK 静态凭据沿用私有桶配置，签名地址不进入普通日志、审计或业务列表。撤销后不再签发，但已经签发的地址可能继续使用至其到期。
 
 ### 6.5 文件核验
 
@@ -360,9 +417,21 @@ VerificationService 使用固定大小线程池及无等待队列处理文件/�
 
 STORED 实际打开版本对象并流式计算 SHA-256，不读取数据库保存的摘要作比较。COPY 只使用私有临时文件（业务临时文件 0600），不调用对象存储写入或登记新版本；处理结束清理临时文件。查询按发起人的机构选择 Gateway，并校验返回的证据编号、版本、摘要格式、OrgB 提交机构及首次交易编号，响应异常按 CHAIN_QUERY_FAILED 处理。
 
-V7__verification_records.sql 追加 verification_record，保存版本、执行人、来源、实际摘要/大小、链摘要/交易编号、结果、安全原因码与数据库 UTC 时间。MATCH/MISMATCH 必须同时具备可比较摘要，读失败不得残留部分摘要，链查询失败/未登记不得伪造链摘要。结果和 FILE_VERIFICATION_COMPLETED 审计在同一短事务提交；最终事务先锁任务再锁账号并重查当前权限，处理期间被移除成员或撤销身份时返回 403/401，不保存或暴露核验结果。历史查询也重新检查当前权限。共享授权路径在 T020 接入。
+V7__verification_records.sql 追加 verification_record，保存版本、执行人、来源、实际摘要/大小、链摘要/交易编号、结果、安全原因码与数据库 UTC 时间。MATCH/MISMATCH 必须同时具备可比较摘要，读失败不得残留部分摘要，链查询失败/未登记不得伪造链摘要。结果和 FILE_VERIFICATION_COMPLETED 审计在同一短事务提交；最终事务先锁任务再锁账号并重查当前权限，处理期间被移除成员、撤销共享或撤销身份时返回 403/401，不保存或暴露核验结果。T020 的共享路径在最终事务中锁定授权并重验数据库期限，核验历史也检查当前版本权限；文件及 Fabric I/O 始终在事务外执行。
 
 本次核验不改变复核、存证或正式文件版本状态；本地仍 PENDING 而实际账本有有效记录时可返回 MATCH/MISMATCH，状态修复继续由存证对账处理。历史中的失败结果描述该次核验，不表示链记录被删除或文件已被篡改。
+
+### 6.6 任务审计与业务关系查询
+
+T021 在 database profile 下提供两个读取接口，复用 V1～V11，不修改旧审计或新增表。两者均先锁任务，再锁定并重验当前账号，通过 ResourcePermissionService.requireTaskHistory 检查机构、角色和显式成员关系：OrgA 的 OWNER_TASK_ADMIN、OWNER_REVIEWER、OWNER_DATA_APPROVER，或 OrgB 的 OPERATOR_TASK_ADMIN。任务完成后可继续读取；普通操作员、单独 ORG_ADMIN 角色和仅持有版本共享授权的用户不能读取任务级历史。未知或无权访问的任务统一返回 403。
+
+GET /tasks/{id}/audit-logs 使用 page/pageSize（默认 1/20，上限 100），支持 action、resourceType、traceId 精确筛选。SQL 按资源类型及其真实外键归属限定任务，再计数和分页，以 created_at DESC、id DESC 排序。任务记录包含任务本身、执行批次、上传、版本、存证、异常和共享操作；设备报告通过执行批次关联。相同操作者、机构、设备或 traceId 不作为任务归属依据，全局登录、角色管理及设备登记/启停仍属于各自模块记录。
+
+审计返回原记录编号、actorType/actorId/orgId、action、resourceType/resourceId、traceId、result、UTC createdAt，以及可可靠关联的 taskId/versionId/subtaskId/executionId。URL_ISSUED 的 actionLabel 固定为“下载地址签发”，其余动作保留代码。查询不增加新的审计，也不返回申请原因、请求正文、对象键、密码、JWT、私钥、交易字节或完整下载地址。
+
+GET /tasks/{id}/evidence-relations 支持同样分页及可选 requirementId、executionId，返回 taskId、items、page、pageSize、total、asOf。SQL 先按该任务和筛选条件取得至多 100 个固定版本，再对当前页编号批量聚合，避免将异常、共享和核验等多对多展开后重复计数。每项包含版本元数据及 requirementId/evidenceId/versionNo/subtaskId/executionId/uploadId、issueCount、唯一复核记录摘要、存证摘要、共享各状态数量和 verificationCount；复核及审批原因、申请人明细继续由原有受控接口提供。
+
+currentExecution 表示是否属于子任务当前执行，latestInExecution 只在相同资料项和执行批次内判断；两者不能由全局最大版本号替代。共享数量按一次数据库 asOf 计算：APPROVED 且 validUntil 晚于该时间计入 activeGrantCount，否则计入 expiredGrantCount，其余 PENDING/REJECTED/REVOKED 各自统计。存证的区块号和验证码仅来自 confirmedTxId 对应的本地检查点，没有相应检查点时保留 null。两个接口都只读取数据库，在短事务中保持权限及关联一致，不读取文件或调用 Fabric。
 
 ## 7. Fabric 合约与接入
 
@@ -495,7 +564,7 @@ AnchorProcessor 不持有数据库事务。AnchorTransactions 先锁任务再锁
 
 存证结果或持久化等待计划与 EVIDENCE_ANCHOR 消费 DONE、审计一起提交后才 ACK。基础扫描默认每 10 秒复用同一处理器，绕过 DONE；UNKNOWN 不设次数上限，明确可重试 FAILED 暂以 10 次为界，完整策略和人工入口由 T024 完善。基础租约不含续租，完整续租及进程故障矩阵留 T023/T027。
 
-GET /evidence-versions/{id} 返回固定版本元数据及 anchor；GET /evidence-versions/{id}/anchor 返回数据库存证状态、首次确认交易编号、最近尝试编号/阶段、验证码、区块号和安全错误码。这两个查询不调用 Fabric。每次重新校验当前账号、机构业务角色及显式任务成员，未知或不可见版本均为 403；单独 ORG_ADMIN 角色不授予查看权限。共享路径由 T020 接入。无正式版本列表、下载或人工强制成功入口。
+GET /evidence-versions/{id} 返回固定版本元数据及 anchor；GET /evidence-versions/{id}/anchor 返回数据库存证状态、首次确认交易编号、最近尝试编号/阶段、验证码、区块号和安全错误码。这两个查询不调用 Fabric。每次重新校验当前账号及任务路径或精确版本共享授权，未知或不可见版本均为 403；单独 ORG_ADMIN 角色不授予任务数据权限，但可以像其他注册账号一样申请并取得具体版本授权。T020 的正式版本列表和下载接口见第 6.4 节；存证状态仍只能由真实处理流程形成。
 
 ### 8.3 UNKNOWN 与失败重试
 
@@ -530,25 +599,30 @@ chain_attempt.phase 采用 PREPARED、SUBMITTING、SUBMITTED、VALID、INVALID�
 | PUT /tasks/{id}/members | userIds、expectedLockVersion | 只更新调用者有权管理的本机构成员，保留其他机构成员及任务创建人 |
 | POST /tasks/{id}/assign | operatorOrgId、operatorAdminId、expectedLockVersion | 委托方任务管理员；进入 ASSIGNED |
 | POST /tasks/{id}/subtasks | 名称、requirementIds、expectedLockVersion | 分配阶段运营商管理员细化，不能删减必交要求 |
-| POST /subtasks/{id}/executions | droneId、expectedLockVersion | 运营商管理员初次分配或人工换机 |
+| POST /subtasks/{id}/executions | droneId、expectedLockVersion、reason（换机必填） | 运营商管理员初次分配或人工换机 |
+| GET /subtasks/{id}/executions | page、pageSize | 当前任务权限；批次历史和调整记录 |
+| GET /tasks/{id}/progress | 无 | 当前任务权限；当前批次进度、资料和缺失必交项 |
 | POST /tasks/{id}/start | expectedLockVersion | 检查子任务、资料要求及设备完整，进入 RUNNING |
-| POST /tasks/{id}/submit-acceptance | expectedLockVersion | 运营商提交，进入 WAITING_ACCEPTANCE |
-| POST /tasks/{id}/complete | expectedLockVersion | 委托方检查全部验收条件，进入 COMPLETED |
-| POST /drones；GET /drones | code；筛选条件 | 运营商管理员登记或按权限查看，首次返回设备令牌 |
+| POST /tasks/{id}/submit-acceptance | expectedLockVersion | OrgB OPERATOR_TASK_ADMIN 任务成员；必交资料齐全后进入 WAITING_ACCEPTANCE |
+| POST /tasks/{id}/complete | expectedLockVersion | OrgA OWNER_TASK_ADMIN 任务成员；全部当前必交版本通过复核及确认存证、无当前 VERIFYING 后进入 COMPLETED |
+| POST /drones；GET /drones；GET /drones/{id} | code；page/pageSize；设备编号 | 本机构 OPERATOR_TASK_ADMIN 登记/查看，首次返回 deviceToken，读取不含摘要 |
+| PATCH /drones/{id}/enabled | enabled、expectedLockVersion | 本机构 OPERATOR_TASK_ADMIN 启停设备，版本冲突 409 |
 | POST /device/reports | bootId、seq、eventId、executionId、type、progress | 设备身份；重复事件返回原处理结果 |
 
 ### 9.2 文件、复核、共享与存证
 
 | 方法与路径 | 输入要点 | 权限及结果 |
 | --- | --- | --- |
-| POST /upload-sessions | clientRequestId、requirementId、executionId、filename、contentType、size | T010 为操作员；设备由 T015 接入。返回 uploadId、partSize、partCount、expiresAt 及进度 |
+| POST /upload-sessions | clientRequestId、requirementId、executionId、filename、contentType、size | 操作员；T015 的设备使用 /device/upload-sessions 同构接口及独立凭据。返回 uploadId、partSize、partCount、expiresAt 及进度 |
 | PUT /upload-sessions/{id}/parts/{partNo} | 分片二进制 | 校验会话归属和权限；同内容重复成功 |
 | GET /upload-sessions/{id} | 无 | 进度、已完成分片、处理状态、versionId |
 | POST /upload-sessions/{id}/complete | 无 | 冻结分片并异步处理，返回 202 或原结果 |
 | GET /evidence-versions | taskId、requirementId、分页 | 仅返回可见版本的元数据 |
 | GET /evidence-versions/{id} | 无 | 版本详情、复核及存证状态，不包含私有对象键 |
 | POST /issues | versionId、description | 运营商任务成员提交异常 |
+| GET /evidence-versions/{id}/issues | page、pageSize | 当前任务权限；具体版本的异常记录分页 |
 | POST /evidence-versions/{id}/review | decision、reason、expectedReviewStatus | 委托方复核成员，通过或退回 |
+| GET /evidence-versions/{id}/review | 无 | 当前任务权限；当前复核状态及该版唯一正式结论 |
 | POST /access-grants | clientRequestId、versionId、reason、requestedValidUntil | 注册用户申请，不返回文件详情 |
 | POST /access-grants/{id}/decision | decision、validUntil、reason、expectedLockVersion | 委托方审批成员；检查正式共享条件 |
 | POST /access-grants/{id}/revoke | reason、expectedLockVersion | 有权限的委托方审批人员 |
@@ -558,7 +632,8 @@ chain_attempt.phase 采用 PREPARED、SUBMITTING、SUBMITTED、VALID、INVALID�
 | GET /evidence-versions/{id}/verifications | 分页 | 当前仍有版本权限才返回核验历史 |
 | GET /evidence-versions/{id}/anchor | 无 | 存证状态、首次交易编号、最近失败原因 |
 | POST /evidence-versions/{id}/anchor-retries | reason | OrgB 任务管理员受控重试或重新检查；不绕过未知态确认 |
-| GET /tasks/{id}/audit-logs | 分页 | 有管理或复核权限的任务成员 |
+| GET /tasks/{id}/audit-logs | page、pageSize，可选 action/resourceType/traceId | 当前管理、复核或资料审批成员；按真实资源归属限定任务后分页 |
+| GET /tasks/{id}/evidence-relations | page、pageSize，可选 requirementId/executionId | 同上权限；当前页版本及异常、复核、存证、共享和核验摘要 |
 
 任务及资料要求的草稿修改接口在实现时采用 PUT，并遵守草稿/已分配阶段及委托方权限约束；启动后不提供修改验收要求的入口。核心详情接口已覆盖复核历史、异常与版本关联展示。
 

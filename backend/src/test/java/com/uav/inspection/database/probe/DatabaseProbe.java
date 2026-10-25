@@ -4,6 +4,7 @@ import com.uav.inspection.UavInspectionApplication;
 import com.uav.inspection.common.persistence.UtcInstantTypeHandler;
 import com.uav.inspection.device.persistence.DroneMapper;
 import com.uav.inspection.identity.persistence.IdentityMapper;
+import com.uav.inspection.inspection.persistence.TaskMapper;
 import com.uav.inspection.messaging.persistence.OutboxMapper;
 import org.apache.ibatis.type.JdbcType;
 import org.flywaydb.core.Flyway;
@@ -36,6 +37,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
@@ -54,7 +56,11 @@ public final class DatabaseProbe {
     private static final String DRONE_CODE = "UAV-DEMO-001";
     private static final Instant FIXED_INSTANT = Instant.parse("2026-10-21T00:00:00.123Z");
     private static final LocalDateTime FIXED_UTC = LocalDateTime.parse("2026-10-21T00:00:00.123");
-    private static final String SNAPSHOT_DOMAIN = "T013-full-sixteen-table-snapshot-v1";
+    private static final String SNAPSHOT_DOMAIN = "T020-full-twenty-one-table-snapshot-v1";
+    private static final String ORIGINAL_TWENTY_SNAPSHOT_DOMAIN = "T018-full-twenty-table-snapshot-v1";
+    private static final String ORIGINAL_EIGHTEEN_SNAPSHOT_DOMAIN = "T016-full-eighteen-table-snapshot-v1";
+    private static final String ORIGINAL_SEVENTEEN_SNAPSHOT_DOMAIN = "T015-full-seventeen-table-snapshot-v1";
+    private static final String ORIGINAL_SIXTEEN_SNAPSHOT_DOMAIN = "T013-full-sixteen-table-snapshot-v1";
     private static final String ORIGINAL_FIFTEEN_SNAPSHOT_DOMAIN = "T012-full-fifteen-table-snapshot-v1";
     private static final String PREVIOUS_SNAPSHOT_DOMAIN = "T011-full-fourteen-table-snapshot-v1";
     private static final String ORIGINAL_SNAPSHOT_DOMAIN = "T010-full-eleven-table-snapshot-v1";
@@ -84,6 +90,11 @@ public final class DatabaseProbe {
         TABLE_ORDER.put("consumed_event", "consumer_code, event_id");
         TABLE_ORDER.put("chain_attempt", "id");
         TABLE_ORDER.put("verification_record", "id");
+        TABLE_ORDER.put("device_event", "id");
+        TABLE_ORDER.put("execution_adjustment", "id");
+        TABLE_ORDER.put("issue", "id");
+        TABLE_ORDER.put("review_record", "id");
+        TABLE_ORDER.put("access_grant", "id");
     }
 
     private final Map<String, Object> report = new LinkedHashMap<>();
@@ -167,7 +178,8 @@ public final class DatabaseProbe {
             report.put("emptyBusinessData", List.of("app_user", "inspection_task", "task_member", "drone",
                             "inspection_subtask", "material_requirement", "task_execution",
                             "upload_session", "upload_part", "evidence_version", "chain_submission",
-                            "outbox_event", "consumed_event", "chain_attempt", "verification_record")
+                            "outbox_event", "consumed_event", "chain_attempt", "verification_record", "device_event",
+                            "execution_adjustment", "issue", "review_record", "access_grant")
                     .stream().allMatch(table -> counts.get(table) == 0L));
             if (demoEnabled) {
                 report.put("stage", "demo_data_validation");
@@ -176,6 +188,14 @@ public final class DatabaseProbe {
             String before = snapshotDigest();
             report.put("businessSnapshotDomain", SNAPSHOT_DOMAIN);
             report.put("businessSnapshotSha256", before);
+            report.put("originalTwentySnapshotDomain", ORIGINAL_TWENTY_SNAPSHOT_DOMAIN);
+            report.put("originalTwentySnapshotSha256", snapshotDigest(ORIGINAL_TWENTY_SNAPSHOT_DOMAIN, 20));
+            report.put("originalEighteenSnapshotDomain", ORIGINAL_EIGHTEEN_SNAPSHOT_DOMAIN);
+            report.put("originalEighteenSnapshotSha256", snapshotDigest(ORIGINAL_EIGHTEEN_SNAPSHOT_DOMAIN, 18));
+            report.put("originalSeventeenSnapshotDomain", ORIGINAL_SEVENTEEN_SNAPSHOT_DOMAIN);
+            report.put("originalSeventeenSnapshotSha256", snapshotDigest(ORIGINAL_SEVENTEEN_SNAPSHOT_DOMAIN, 17));
+            report.put("originalSixteenSnapshotDomain", ORIGINAL_SIXTEEN_SNAPSHOT_DOMAIN);
+            report.put("originalSixteenSnapshotSha256", snapshotDigest(ORIGINAL_SIXTEEN_SNAPSHOT_DOMAIN, 16));
             report.put("originalFifteenSnapshotDomain", ORIGINAL_FIFTEEN_SNAPSHOT_DOMAIN);
             report.put("originalFifteenSnapshotSha256", snapshotDigest(ORIGINAL_FIFTEEN_SNAPSHOT_DOMAIN, 15));
             report.put("originalFourteenSnapshotDomain", PREVIOUS_SNAPSHOT_DOMAIN);
@@ -187,6 +207,8 @@ public final class DatabaseProbe {
                 verifyConstraints();
                 report.put("stage", "outbox_lease_transitions");
                 verifyOutboxLeaseTransitions(context.getBean(OutboxMapper.class));
+                report.put("stage", "task_completion_transitions");
+                verifyTaskCompletionTransitions(context.getBean(TaskMapper.class));
                 report.put("stage", "utc_round_trip");
                 verifyUtcRoundTrip();
                 require(before.equals(snapshotDigest()), "rollback_changed_persistent_business_data");
@@ -232,12 +254,14 @@ public final class DatabaseProbe {
         var entries = jdbc.queryForList("""
                 SELECT version, script, checksum, success FROM flyway_schema_history ORDER BY installed_rank
                 """);
-        Map<String, String> expectedScripts = Map.of("1", "V1__identity_and_task_scope.sql",
-                "2", "V2__identity_audit.sql", "3", "V3__task_execution_scope.sql",
-                "4", "V4__upload_sessions_and_versions.sql",
-                "5", "V5__finalization_outbox_and_submission.sql", "6", "V6__chain_attempts.sql",
-                "7", "V7__verification_records.sql");
-        require(entries.size() == expectedScripts.size(), "expected_successful_v1_through_v7_migrations");
+        Map<String, String> expectedScripts = Map.ofEntries(Map.entry("1", "V1__identity_and_task_scope.sql"),
+                Map.entry("2", "V2__identity_audit.sql"), Map.entry("3", "V3__task_execution_scope.sql"),
+                Map.entry("4", "V4__upload_sessions_and_versions.sql"),
+                Map.entry("5", "V5__finalization_outbox_and_submission.sql"), Map.entry("6", "V6__chain_attempts.sql"),
+                Map.entry("7", "V7__verification_records.sql"), Map.entry("8", "V8__device_reports.sql"),
+                Map.entry("9", "V9__execution_adjustments.sql"), Map.entry("10", "V10__issues_and_reviews.sql"),
+                Map.entry("11", "V11__version_access_grants.sql"));
+        require(entries.size() == expectedScripts.size(), "expected_successful_v1_through_v11_migrations");
         Map<String, Integer> checksums = new LinkedHashMap<>();
         for (var entry : entries) {
             Object version = entry.get("version");
@@ -250,14 +274,16 @@ public final class DatabaseProbe {
         }
         require(checksums.keySet().equals(expectedScripts.keySet()), "incomplete_flyway_migration_history");
         Map<String, Integer> originalChecksums = Map.of("1", -539134757, "2", 1185045295,
-                "3", -394507728, "4", -1021150431, "5", -507899413, "6", 186672578);
+                "3", -394507728, "4", -1021150431, "5", -507899413, "6", 186672578, "7", -763051633,
+                "8", 1053255897, "9", 72853277, "10", -573715695);
         require(originalChecksums.entrySet().stream().allMatch(entry -> entry.getValue().equals(checksums.get(entry.getKey()))),
-                "original_v1_through_v6_migration_checksums_changed");
+                "original_v1_through_v10_migration_checksums_changed");
         report.put("originalMigrationChecksumsPreserved", true);
         // Keep the original V1 field for existing evidence readers, while comparing all applied migrations below.
         report.put("flywayChecksum", checksums.get("1"));
         report.put("fullMigrationChecksums", checksums);
-        report.put("flyway", Map.of("version", "7", "successfulEntries", entries.size(),
+        require(Integer.valueOf(1029133993).equals(checksums.get("11")),"unexpected_v11_migration_checksum");
+        report.put("flyway", Map.of("version", "11", "successfulEntries", entries.size(),
                 "checksums", checksums, "validationPassed", true));
     }
 
@@ -398,6 +424,11 @@ public final class DatabaseProbe {
         verifyFinalizationConstraints(checks, operatorUser, memberTask, validTask);
         verifyChainAttemptConstraints(checks, operatorUser, memberTask, validTask);
         verifyVerificationConstraints(checks, operatorUser, memberTask, validTask);
+        verifyDeviceEventConstraints(checks, memberTask, validTask);
+        verifyExecutionAdjustmentConstraints(checks, memberTask, validTask);
+        verifyIssueAndReviewConstraints(checks, operatorUser, memberTask, validTask);
+        verifyTaskCompletionConstraints(checks, memberTask, validTask);
+        verifyAccessGrantConstraints(checks, operatorUser, memberTask, validTask);
         report.put("constraintCount", checks.size());
     }
 
@@ -940,6 +971,564 @@ public final class DatabaseProbe {
                 "temporary_verification_record_not_inserted");
     }
 
+    private void verifyDeviceEventConstraints(Map<String,Object> checks,String taskId,Runnable validTask) {
+        String subtaskId=UUID.randomUUID().toString();
+        String executionId=UUID.randomUUID().toString();
+        String eventRecordId=UUID.randomUUID().toString();
+        String eventId=UUID.randomUUID().toString();
+        String bootId=UUID.randomUUID().toString();
+        String otherDrone=UUID.randomUUID().toString();
+        String fingerprint="e".repeat(64);
+        Runnable validScope=()->{
+            validTask.run(); insertSubtask(subtaskId,taskId);
+            insertExecution(executionId,subtaskId,"RUNNING",0,FIXED_UTC,null);
+        };
+        Runnable validEvent=()->{
+            validScope.run();
+            insertDeviceEvent(eventRecordId,DRONE_ID,bootId,0,eventId,executionId,"HEARTBEAT",null,fingerprint,0);
+        };
+        Runnable eventAndOtherDevice=()->{
+            validEvent.run();
+            require(jdbc.update("INSERT INTO drone(id,operator_org_id,code,token_hash) VALUES(?,?,?,?)",
+                    otherDrone,OPERATOR,"DBPROBE-"+otherDrone,"d".repeat(64))==1,"temporary_second_device_not_inserted");
+        };
+        checks.put("duplicateDeviceBootSequence",expectConstraint("duplicate_device_boot_sequence",1062,"23000",validEvent,
+                ()->insertDeviceEvent(UUID.randomUUID().toString(),DRONE_ID,bootId,0,UUID.randomUUID().toString(),
+                        executionId,"HEARTBEAT",null,fingerprint,0)));
+        checks.put("duplicateDeviceEventAcrossBoots",expectConstraint("duplicate_device_event_across_boots",1062,"23000",validEvent,
+                ()->insertDeviceEvent(UUID.randomUUID().toString(),DRONE_ID,UUID.randomUUID().toString(),1,eventId,
+                        executionId,"HEARTBEAT",null,fingerprint,0)));
+        checks.put("foreignDeviceExecutionReport",expectConstraint("foreign_device_execution_report",1452,"23000",eventAndOtherDevice,
+                ()->jdbc.update("UPDATE device_event SET drone_id=? WHERE id=?",otherDrone,eventRecordId)));
+        checks.put("danglingDeviceReport",expectConstraint("dangling_device_report",1452,"23000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET drone_id=? WHERE id=?",UUID.randomUUID().toString(),eventRecordId)));
+        checks.put("danglingReportExecution",expectConstraint("dangling_report_execution",1452,"23000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET execution_id=? WHERE id=?",UUID.randomUUID().toString(),eventRecordId)));
+        checks.put("heartbeatWithoutExecution",expectConstraint("heartbeat_without_execution",1048,"23000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET execution_id=NULL WHERE id=?",eventRecordId)));
+        checks.put("invalidReportBootId",expectConstraint("invalid_report_boot_id",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET boot_id='not-a-uuid' WHERE id=?",eventRecordId)));
+        checks.put("invalidDeviceEventId",expectConstraint("invalid_device_event_id",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET event_id='not-a-uuid' WHERE id=?",eventRecordId)));
+        checks.put("negativeDeviceSequence",expectConstraint("negative_device_sequence",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET seq=-1 WHERE id=?",eventRecordId)));
+        checks.put("deviceSequenceAboveJsonIntegerLimit",expectConstraint("device_sequence_above_json_integer_limit",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET seq=9007199254740992 WHERE id=?",eventRecordId)));
+        checks.put("invalidDeviceEventType",expectConstraint("invalid_device_event_type",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET event_type='LOCATION' WHERE id=?",eventRecordId)));
+        checks.put("heartbeatWithProgress",expectConstraint("heartbeat_with_progress",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET progress=1 WHERE id=?",eventRecordId)));
+        checks.put("progressWithoutPercentage",expectConstraint("progress_without_percentage",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET event_type='PROGRESS' WHERE id=?",eventRecordId)));
+        checks.put("negativeDeviceProgress",expectConstraint("negative_device_progress",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET event_type='PROGRESS',progress=-1 WHERE id=?",eventRecordId)));
+        checks.put("deviceProgressAboveHundred",expectConstraint("device_progress_above_hundred",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET event_type='PROGRESS',progress=101 WHERE id=?",eventRecordId)));
+        checks.put("invalidDevicePayloadFingerprint",expectConstraint("invalid_device_payload_fingerprint",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET payload_fingerprint='not-a-sha256' WHERE id=?",eventRecordId)));
+        checks.put("negativeAppliedDeviceProgress",expectConstraint("negative_applied_device_progress",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET applied_progress=-1 WHERE id=?",eventRecordId)));
+        checks.put("appliedDeviceProgressAboveHundred",expectConstraint("applied_device_progress_above_hundred",3819,"HY000",validEvent,
+                ()->jdbc.update("UPDATE device_event SET applied_progress=101 WHERE id=?",eventRecordId)));
+        checks.put("restrictReportedExecutionDeletion",expectConstraint("restrict_reported_execution_deletion",1451,"23000",validEvent,
+                ()->jdbc.update("DELETE FROM task_execution WHERE id=?",executionId)));
+        Map<String,Object> replay=transactions.execute(transaction->{
+            transaction.setRollbackOnly(); validEvent.run();
+            String progressId=UUID.randomUUID().toString();
+            insertDeviceEvent(progressId,DRONE_ID,bootId,1,UUID.randomUUID().toString(),executionId,"PROGRESS",37,fingerprint,65);
+            insertDeviceEvent(UUID.randomUUID().toString(),DRONE_ID,UUID.randomUUID().toString(),0,UUID.randomUUID().toString(),
+                    executionId,"HEARTBEAT",null,fingerprint,65);
+            String otherSubtask=UUID.randomUUID().toString(); String otherExecution=UUID.randomUUID().toString();
+            require(jdbc.update("INSERT INTO drone(id,operator_org_id,code,token_hash) VALUES(?,?,?,?)",
+                    otherDrone,OPERATOR,"DBPROBE-"+otherDrone,"d".repeat(64))==1,"temporary_independent_device_not_inserted");
+            insertSubtask(otherSubtask,taskId);
+            require(jdbc.update("""
+                    INSERT INTO task_execution(id,subtask_id,drone_id,status,progress,started_at)
+                    VALUES(?,?,?,'RUNNING',0,?)
+                    """,otherExecution,otherSubtask,otherDrone,FIXED_UTC)==1,"temporary_independent_execution_not_inserted");
+            insertDeviceEvent(UUID.randomUUID().toString(),otherDrone,bootId,0,eventId,otherExecution,"HEARTBEAT",null,fingerprint,0);
+            require(Long.valueOf(4).equals(jdbc.queryForObject("SELECT COUNT(*) FROM device_event WHERE execution_id IN (?,?)",
+                    Long.class,executionId,otherExecution)),"device_event_scope_does_not_allow_boot_or_device_independence");
+            Map<String,Object> accepted=jdbc.queryForMap("""
+                    SELECT progress,applied_progress,payload_fingerprint,
+                        received_at<=UTC_TIMESTAMP(3) AND received_at>=TIMESTAMPADD(MINUTE,-1,UTC_TIMESTAMP(3)) AS utc_default
+                    FROM device_event WHERE id=?
+                    """,progressId);
+            require(((Number)accepted.get("progress")).intValue()==37 &&((Number)accepted.get("applied_progress")).intValue()==65
+                    &&fingerprint.equals(accepted.get("payload_fingerprint")) &&booleanValue(accepted.get("utc_default")),
+                    "accepted_device_result_or_database_utc_timestamp_changed");
+            return Map.of("bootRestartMayReuseSequence",true,"differentDevicesMayReuseEventAndSequence",true,
+                    "acceptedProgressSnapshotPreserved",true,"requestFingerprintPreserved",true,
+                    "databaseUtcReceiveTimeVerified",true,"rolledBack",true,
+                    "scope","Schema-only synthetic reports; no production device event or execution is updated.");
+        });
+        require(replay!=null,"missing_device_event_round_trip_result"); report.put("deviceEventRoundTrip",replay);
+    }
+
+    private void insertDeviceEvent(String id,String drone,String boot,long sequence,String event,String execution,
+                                   String type,Integer progress,String fingerprint,int appliedProgress) {
+        require(jdbc.update("""
+                INSERT INTO device_event(id,drone_id,boot_id,seq,event_id,execution_id,event_type,progress,payload_fingerprint,applied_progress)
+                VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,id,drone,boot,sequence,event,execution,type,progress,fingerprint,appliedProgress)==1,
+                "temporary_device_event_not_inserted");
+    }
+
+    private void verifyExecutionAdjustmentConstraints(Map<String,Object> checks,String taskId,Runnable validTask) {
+        String subtaskId=UUID.randomUUID().toString();
+        String previousId=UUID.randomUUID().toString();
+        String currentId=UUID.randomUUID().toString();
+        String thirdId=UUID.randomUUID().toString();
+        String adjustmentId=UUID.randomUUID().toString();
+        String actorId=UUID.randomUUID().toString();
+        String otherSubtaskId=UUID.randomUUID().toString();
+        String foreignExecutionId=UUID.randomUUID().toString();
+        Runnable validScope=()->{
+            validTask.run(); insertSubtask(subtaskId,taskId);
+            insertExecution(previousId,subtaskId,"CLOSED",40,FIXED_UTC,FIXED_UTC.plusMinutes(1));
+            insertExecution(currentId,subtaskId,"RUNNING",0,FIXED_UTC.plusMinutes(1),null);
+            require(jdbc.update("""
+                    INSERT INTO app_user(id,org_id,username,password_hash,roles)
+                    SELECT ?,org_id,?,password_hash,roles FROM app_user WHERE id=?
+                    """,actorId,"T016-adjustment-"+UUID.randomUUID(),users.get("operator-admin").id())==1,
+                    "temporary_adjustment_actor_not_inserted");
+        };
+        Runnable validAdjustment=()->{
+            validScope.run();
+            insertAdjustment(adjustmentId,taskId,subtaskId,previousId,currentId,actorId,"设备电量不足，人工换机");
+        };
+        Runnable withThird=()->{
+            validAdjustment.run();
+            insertExecution(thirdId,subtaskId,"CLOSED",10,FIXED_UTC,FIXED_UTC.plusSeconds(30));
+        };
+        Runnable withForeignExecution=()->{
+            validAdjustment.run(); insertSubtask(otherSubtaskId,taskId);
+            insertExecution(foreignExecutionId,otherSubtaskId,"CLOSED",0,FIXED_UTC,FIXED_UTC.plusSeconds(30));
+        };
+        checks.put("adjustmentCannotReuseSameExecution",expectConstraint("adjustment_cannot_reuse_same_execution",3819,"HY000",validScope,
+                ()->insertAdjustment(adjustmentId,taskId,subtaskId,previousId,previousId,actorId,"无效同批次替换")));
+        checks.put("adjustmentCannotForkPreviousExecution",expectConstraint("adjustment_cannot_fork_previous_execution",1062,"23000",withThird,
+                ()->insertAdjustment(UUID.randomUUID().toString(),taskId,subtaskId,previousId,thirdId,actorId,"重复旧批次")));
+        checks.put("adjustmentCannotMergeIntoSameExecution",expectConstraint("adjustment_cannot_merge_into_same_execution",1062,"23000",withThird,
+                ()->insertAdjustment(UUID.randomUUID().toString(),taskId,subtaskId,thirdId,currentId,actorId,"重复新批次")));
+        String otherTaskId=UUID.randomUUID().toString();
+        Runnable withOtherTask=()->{
+            validAdjustment.run();
+            insertTask(otherTaskId,users.get("owner-admin").id(),OWNER,OPERATOR,0);
+        };
+        checks.put("adjustmentSubtaskCannotBorrowAnotherTask",expectConstraint("adjustment_subtask_cannot_borrow_another_task",1452,"23000",withOtherTask,
+                ()->jdbc.update("UPDATE execution_adjustment SET task_id=? WHERE id=?",otherTaskId,adjustmentId)));
+        checks.put("adjustmentPreviousMustBelongToSubtask",expectConstraint("adjustment_previous_must_belong_to_subtask",1452,"23000",withForeignExecution,
+                ()->jdbc.update("UPDATE execution_adjustment SET previous_execution_id=? WHERE id=?",foreignExecutionId,adjustmentId)));
+        checks.put("adjustmentNewMustBelongToSubtask",expectConstraint("adjustment_new_must_belong_to_subtask",1452,"23000",withForeignExecution,
+                ()->jdbc.update("UPDATE execution_adjustment SET new_execution_id=? WHERE id=?",foreignExecutionId,adjustmentId)));
+        checks.put("danglingAdjustmentPrevious",expectConstraint("dangling_adjustment_previous",1452,"23000",validAdjustment,
+                ()->jdbc.update("UPDATE execution_adjustment SET previous_execution_id=? WHERE id=?",UUID.randomUUID().toString(),adjustmentId)));
+        checks.put("danglingAdjustmentNew",expectConstraint("dangling_adjustment_new",1452,"23000",validAdjustment,
+                ()->jdbc.update("UPDATE execution_adjustment SET new_execution_id=? WHERE id=?",UUID.randomUUID().toString(),adjustmentId)));
+        checks.put("danglingAdjustmentActor",expectConstraint("dangling_adjustment_actor",1452,"23000",validAdjustment,
+                ()->jdbc.update("UPDATE execution_adjustment SET actor_id=? WHERE id=?",UUID.randomUUID().toString(),adjustmentId)));
+        checks.put("emptyAdjustmentReason",expectConstraint("empty_adjustment_reason",3819,"HY000",validAdjustment,
+                ()->jdbc.update("UPDATE execution_adjustment SET reason='' WHERE id=?",adjustmentId)));
+        checks.put("whitespaceAdjustmentReason",expectConstraint("whitespace_adjustment_reason",3819,"HY000",validAdjustment,
+                ()->jdbc.update("UPDATE execution_adjustment SET reason=? WHERE id=?"," \t\n ",adjustmentId)));
+        checks.put("oversizedAdjustmentReason",expectConstraint("oversized_adjustment_reason",1406,"22001",validAdjustment,
+                ()->jdbc.update("UPDATE execution_adjustment SET reason=? WHERE id=?","换".repeat(1001),adjustmentId)));
+        checks.put("restrictAdjustedPreviousDeletion",expectConstraint("restrict_adjusted_previous_deletion",1451,"23000",validAdjustment,
+                ()->jdbc.update("DELETE FROM task_execution WHERE id=?",previousId)));
+        checks.put("restrictAdjustedNewDeletion",expectConstraint("restrict_adjusted_new_deletion",1451,"23000",validAdjustment,
+                ()->jdbc.update("DELETE FROM task_execution WHERE id=?",currentId)));
+        checks.put("restrictAdjustmentActorDeletion",expectConstraint("restrict_adjustment_actor_deletion",1451,"23000",validAdjustment,
+                ()->jdbc.update("DELETE FROM app_user WHERE id=?",actorId)));
+        Map<String,Object> chain=transactions.execute(transaction->{
+            transaction.setRollbackOnly(); validScope.run();
+            insertAdjustment(adjustmentId,taskId,subtaskId,previousId,currentId,actorId,"换".repeat(1000));
+            require(jdbc.update("UPDATE task_execution SET status='CLOSED',closed_at=? WHERE id=?",
+                    FIXED_UTC.plusMinutes(2),currentId)==1,"temporary_middle_execution_not_closed");
+            insertExecution(thirdId,subtaskId,"RUNNING",0,FIXED_UTC.plusMinutes(2),null);
+            insertAdjustment(UUID.randomUUID().toString(),taskId,subtaskId,currentId,thirdId,actorId,"再次换机保留批次链");
+            require(jdbc.update("UPDATE inspection_subtask SET current_execution_id=? WHERE id=?",thirdId,subtaskId)==1,
+                    "temporary_current_execution_pointer_not_updated");
+            require(Long.valueOf(2).equals(jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM execution_adjustment WHERE task_id=? AND subtask_id=? AND actor_id=?
+                      AND created_at<=UTC_TIMESTAMP(3) AND created_at>=TIMESTAMPADD(MINUTE,-1,UTC_TIMESTAMP(3))
+                    """,Long.class,taskId,subtaskId,actorId)),"adjustment_chain_or_database_utc_default_not_preserved");
+            require(Integer.valueOf(1000).equals(jdbc.queryForObject("SELECT CHAR_LENGTH(reason) FROM execution_adjustment WHERE id=?",
+                    Integer.class,adjustmentId)),"thousand_character_unicode_reason_not_preserved");
+            require(thirdId.equals(jdbc.queryForObject("SELECT current_execution_id FROM inspection_subtask WHERE id=?",String.class,subtaskId))
+                    &&Long.valueOf(1).equals(jdbc.queryForObject("SELECT COUNT(*) FROM task_execution WHERE subtask_id=? AND status='RUNNING' AND progress=0",
+                    Long.class,subtaskId)),"synthetic_adjustment_current_batch_or_reset_progress_not_preserved");
+            return Map.of("onePredecessorAndSuccessorChainAccepted",true,"thousandCharacterReasonAccepted",true,
+                    "actorAndTaskScopePreserved",true,"databaseUtcDefaultVerified",true,"rolledBack",true,
+                    "scope","Synthetic schema-only adjustment fixtures; no retained task, execution or device is changed.");
+        });
+        require(chain!=null,"missing_adjustment_round_trip_result"); report.put("executionAdjustmentRoundTrip",chain);
+    }
+
+    private void insertAdjustment(String id,String task,String subtask,String previous,String replacement,String actor,String reason) {
+        require(jdbc.update("""
+                INSERT INTO execution_adjustment(id,task_id,subtask_id,previous_execution_id,new_execution_id,actor_id,reason)
+                VALUES(?,?,?,?,?,?,?)
+                """,id,task,subtask,previous,replacement,actor,reason)==1,"temporary_execution_adjustment_not_inserted");
+    }
+
+    private void verifyIssueAndReviewConstraints(Map<String,Object> checks,String operatorUser,
+                                                 String taskId,Runnable validTask) {
+        String subtaskId=UUID.randomUUID().toString();
+        String requirementId=UUID.randomUUID().toString();
+        String evidenceId=UUID.randomUUID().toString();
+        String executionId=UUID.randomUUID().toString();
+        String sessionId=UUID.randomUUID().toString();
+        String versionId=UUID.randomUUID().toString();
+        String creatorId=UUID.randomUUID().toString();
+        String reviewerId=UUID.randomUUID().toString();
+        String issueId=UUID.randomUUID().toString();
+        String reviewId=UUID.randomUUID().toString();
+        Runnable validVersion=()->{
+            validTask.run(); insertSubtask(subtaskId,taskId);
+            insertRequirement(requirementId,evidenceId,taskId,subtaskId,1);
+            insertExecution(executionId,subtaskId,"RUNNING",0,FIXED_UTC,null);
+            insertUploadSession(sessionId,taskId,subtaskId,requirementId,evidenceId,
+                    executionId,operatorUser,UUID.randomUUID().toString());
+            insertEvidenceVersion(versionId,sessionId,taskId,subtaskId,requirementId,evidenceId,
+                    executionId,operatorUser,null,1);
+            require(jdbc.update("""
+                    INSERT INTO app_user(id,org_id,username,password_hash,roles)
+                    SELECT ?,org_id,?,password_hash,roles FROM app_user WHERE id=?
+                    """,creatorId,"T018-issue-"+UUID.randomUUID(),operatorUser)==1,
+                    "temporary_issue_creator_not_inserted");
+            require(jdbc.update("""
+                    INSERT INTO app_user(id,org_id,username,password_hash,roles)
+                    SELECT ?,org_id,?,password_hash,roles FROM app_user WHERE id=?
+                    """,reviewerId,"T018-review-"+UUID.randomUUID(),users.get("owner-reviewer").id())==1,
+                    "temporary_reviewer_not_inserted");
+        };
+        Runnable validIssue=()->{
+            validVersion.run(); insertIssue(issueId,taskId,versionId,creatorId,"巡检发现设备异常，绑定原固定版本");
+        };
+        Runnable validReview=()->{
+            validVersion.run(); insertReview(reviewId,versionId,reviewerId,"APPROVED",null);
+        };
+        checks.put("nullIssueDescription",expectConstraint("null_issue_description",1048,"23000",validIssue,
+                ()->jdbc.update("UPDATE issue SET description=NULL WHERE id=?",issueId)));
+        checks.put("emptyIssueDescription",expectConstraint("empty_issue_description",3819,"HY000",validIssue,
+                ()->jdbc.update("UPDATE issue SET description='' WHERE id=?",issueId)));
+        checks.put("whitespaceIssueDescription",expectConstraint("whitespace_issue_description",3819,"HY000",validIssue,
+                ()->jdbc.update("UPDATE issue SET description=? WHERE id=?"," \t\r\n ",issueId)));
+        checks.put("unicodeWhitespaceIssueDescription",expectConstraint("unicode_whitespace_issue_description",3819,"HY000",validIssue,
+                ()->jdbc.update("UPDATE issue SET description=? WHERE id=?","\u00a0\u3000",issueId)));
+        checks.put("oversizedIssueDescription",expectConstraint("oversized_issue_description",1406,"22001",validIssue,
+                ()->jdbc.update("UPDATE issue SET description=? WHERE id=?","异".repeat(4001),issueId)));
+        checks.put("danglingIssueVersion",expectConstraint("dangling_issue_version",1452,"23000",validIssue,
+                ()->jdbc.update("UPDATE issue SET evidence_version_id=? WHERE id=?",UUID.randomUUID().toString(),issueId)));
+        String otherTaskId=UUID.randomUUID().toString();
+        Runnable withOtherTask=()->{
+            validIssue.run(); insertTask(otherTaskId,users.get("owner-admin").id(),OWNER,OPERATOR,0);
+        };
+        checks.put("issueVersionCannotBorrowAnotherTask",expectConstraint("issue_version_cannot_borrow_another_task",1452,"23000",withOtherTask,
+                ()->jdbc.update("UPDATE issue SET task_id=? WHERE id=?",otherTaskId,issueId)));
+        checks.put("danglingIssueCreator",expectConstraint("dangling_issue_creator",1452,"23000",validIssue,
+                ()->jdbc.update("UPDATE issue SET created_by=? WHERE id=?",UUID.randomUUID().toString(),issueId)));
+        checks.put("restrictIssueCreatorDeletion",expectConstraint("restrict_issue_creator_deletion",1451,"23000",validIssue,
+                ()->jdbc.update("DELETE FROM app_user WHERE id=?",creatorId)));
+        checks.put("restrictIssuedVersionDeletion",expectConstraint("restrict_issued_version_deletion",1451,"23000",validIssue,
+                ()->jdbc.update("DELETE FROM evidence_version WHERE id=?",versionId)));
+        checks.put("invalidReviewDecision",expectConstraint("invalid_review_decision",3819,"HY000",validReview,
+                ()->jdbc.update("UPDATE review_record SET decision='PENDING',reason='valid reason' WHERE id=?",reviewId)));
+        checks.put("oneReviewConclusionPerVersion",expectConstraint("one_review_conclusion_per_version",1062,"23000",validReview,
+                ()->insertReview(UUID.randomUUID().toString(),versionId,reviewerId,"RETURNED","第二次结论不得覆盖首次复核")));
+        checks.put("returnedReviewRequiresReason",expectConstraint("returned_review_requires_reason",3819,"HY000",validReview,
+                ()->jdbc.update("UPDATE review_record SET decision='RETURNED',reason=NULL WHERE id=?",reviewId)));
+        checks.put("emptyReturnedReviewReason",expectConstraint("empty_returned_review_reason",3819,"HY000",validReview,
+                ()->jdbc.update("UPDATE review_record SET decision='RETURNED',reason='' WHERE id=?",reviewId)));
+        checks.put("whitespaceReturnedReviewReason",expectConstraint("whitespace_returned_review_reason",3819,"HY000",validReview,
+                ()->jdbc.update("UPDATE review_record SET decision='RETURNED',reason=? WHERE id=?"," \t\n ",reviewId)));
+        checks.put("unicodeWhitespaceReturnedReviewReason",expectConstraint("unicode_whitespace_returned_review_reason",3819,"HY000",validReview,
+                ()->jdbc.update("UPDATE review_record SET decision='RETURNED',reason=? WHERE id=?","\u00a0\u3000",reviewId)));
+        checks.put("emptyApprovedReviewReason",expectConstraint("empty_approved_review_reason",3819,"HY000",validReview,
+                ()->jdbc.update("UPDATE review_record SET reason='' WHERE id=?",reviewId)));
+        checks.put("whitespaceApprovedReviewReason",expectConstraint("whitespace_approved_review_reason",3819,"HY000",validReview,
+                ()->jdbc.update("UPDATE review_record SET reason=? WHERE id=?"," \t\n ",reviewId)));
+        checks.put("oversizedReviewReason",expectConstraint("oversized_review_reason",1406,"22001",validReview,
+                ()->jdbc.update("UPDATE review_record SET reason=? WHERE id=?","复".repeat(1001),reviewId)));
+        checks.put("danglingReviewVersion",expectConstraint("dangling_review_version",1452,"23000",validReview,
+                ()->jdbc.update("UPDATE review_record SET evidence_version_id=? WHERE id=?",UUID.randomUUID().toString(),reviewId)));
+        checks.put("danglingReviewer",expectConstraint("dangling_reviewer",1452,"23000",validReview,
+                ()->jdbc.update("UPDATE review_record SET reviewer_id=? WHERE id=?",UUID.randomUUID().toString(),reviewId)));
+        checks.put("restrictReviewerDeletion",expectConstraint("restrict_reviewer_deletion",1451,"23000",validReview,
+                ()->jdbc.update("DELETE FROM app_user WHERE id=?",reviewerId)));
+        checks.put("restrictReviewedVersionDeletion",expectConstraint("restrict_reviewed_version_deletion",1451,"23000",validReview,
+                ()->jdbc.update("DELETE FROM evidence_version WHERE id=?",versionId)));
+        Map<String,Object> roundTrip=transactions.execute(transaction->{
+            transaction.setRollbackOnly(); validVersion.run();
+            insertIssue(issueId,taskId,versionId,creatorId,"异".repeat(4000));
+            insertIssue(UUID.randomUUID().toString(),taskId,versionId,creatorId,"同版允许多条异常记录\n保留原描述");
+            insertReview(reviewId,versionId,reviewerId,"APPROVED",null);
+            String returnedVersionId=UUID.randomUUID().toString(),returnedSessionId=UUID.randomUUID().toString();
+            insertUploadSession(returnedSessionId,taskId,subtaskId,requirementId,evidenceId,
+                    executionId,operatorUser,UUID.randomUUID().toString());
+            insertEvidenceVersion(returnedVersionId,returnedSessionId,taskId,subtaskId,requirementId,evidenceId,
+                    executionId,operatorUser,null,2);
+            insertReview(UUID.randomUUID().toString(),returnedVersionId,reviewerId,"RETURNED","复".repeat(1000));
+            String explainedVersionId=UUID.randomUUID().toString(),explainedSessionId=UUID.randomUUID().toString();
+            insertUploadSession(explainedSessionId,taskId,subtaskId,requirementId,evidenceId,
+                    executionId,operatorUser,UUID.randomUUID().toString());
+            insertEvidenceVersion(explainedVersionId,explainedSessionId,taskId,subtaskId,requirementId,evidenceId,
+                    executionId,operatorUser,null,3);
+            insertReview(UUID.randomUUID().toString(),explainedVersionId,reviewerId,"APPROVED","检查通过，保留说明");
+            require(Integer.valueOf(4000).equals(jdbc.queryForObject("SELECT CHAR_LENGTH(description) FROM issue WHERE id=?",
+                    Integer.class,issueId)),"four_thousand_character_issue_not_preserved");
+            require(Long.valueOf(2).equals(jdbc.queryForObject("SELECT COUNT(*) FROM issue WHERE task_id=? AND evidence_version_id=?",
+                    Long.class,taskId,versionId)),"multiple_version_bound_issues_not_preserved");
+            require(Long.valueOf(3).equals(jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM review_record WHERE reviewer_id=?
+                      AND created_at<=UTC_TIMESTAMP(3) AND created_at>=TIMESTAMPADD(MINUTE,-1,UTC_TIMESTAMP(3))
+                    """,Long.class,reviewerId)),"review_decisions_or_database_utc_default_not_preserved");
+            require(Long.valueOf(2).equals(jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM issue WHERE created_by=?
+                      AND created_at<=UTC_TIMESTAMP(3) AND created_at>=TIMESTAMPADD(MINUTE,-1,UTC_TIMESTAMP(3))
+                    """,Long.class,creatorId)),"issue_database_utc_default_not_preserved");
+            require(Long.valueOf(1).equals(jdbc.queryForObject("SELECT COUNT(*) FROM review_record WHERE evidence_version_id=? AND decision='APPROVED' AND reason IS NULL",
+                    Long.class,versionId)),"approved_review_null_reason_not_preserved");
+            require(Integer.valueOf(1000).equals(jdbc.queryForObject("SELECT CHAR_LENGTH(reason) FROM review_record WHERE evidence_version_id=? AND decision='RETURNED'",
+                    Integer.class,returnedVersionId)),"thousand_character_return_reason_not_preserved");
+            return Map.of("multipleIssuesPerExactVersionAccepted",true,"fourThousandCharacterDescriptionAccepted",true,
+                    "approvedNullableAndExplainedReasonsAccepted",true,"returnedThousandCharacterReasonAccepted",true,
+                    "independentVersionConclusionsAccepted",true,"databaseUtcDefaultsVerified",true,"rolledBack",true,
+                    "scope","Synthetic schema-only issue/review fixtures; business CAS and permissions are verified separately.");
+        });
+        require(roundTrip!=null,"missing_issue_review_round_trip_result"); report.put("issueReviewRoundTrip",roundTrip);
+    }
+
+    private void insertIssue(String id,String taskId,String versionId,String creatorId,String description) {
+        require(jdbc.update("""
+                INSERT INTO issue(id,task_id,evidence_version_id,description,created_by) VALUES(?,?,?,?,?)
+                """,id,taskId,versionId,description,creatorId)==1,"temporary_issue_not_inserted");
+    }
+
+    private void insertReview(String id,String versionId,String reviewerId,String decision,String reason) {
+        require(jdbc.update("""
+                INSERT INTO review_record(id,evidence_version_id,decision,reason,reviewer_id) VALUES(?,?,?,?,?)
+                """,id,versionId,decision,reason,reviewerId)==1,"temporary_review_not_inserted");
+    }
+
+    private void verifyTaskCompletionConstraints(Map<String,Object> checks,String taskId,Runnable validTask) {
+        checks.put("completedTaskRequiresCompletionTime",expectConstraint("completed_task_requires_completion_time",3819,"HY000",validTask,
+                ()->jdbc.update("UPDATE inspection_task SET status='COMPLETED' WHERE id=?",taskId)));
+        for(String status:List.of("DRAFT","ASSIGNED","RUNNING","WAITING_ACCEPTANCE")) {
+            checks.put("nonCompletedTaskCannotHaveCompletionTime_"+status,
+                    expectConstraint("non_completed_task_cannot_have_completion_time_"+status.toLowerCase(java.util.Locale.ROOT),
+                            3819,"HY000",validTask,()->jdbc.update(
+                                    "UPDATE inspection_task SET status=?,completed_at=UTC_TIMESTAMP(3) WHERE id=?",status,taskId)));
+        }
+    }
+
+    /** Exercise actual production conditional updates; readiness and permissions belong to service/API probes. */
+    private void verifyTaskCompletionTransitions(TaskMapper mapper) {
+        Map<String,Object> result=transactions.execute(transaction->{
+            transaction.setRollbackOnly();
+            String taskId=UUID.randomUUID().toString();
+            insertTask(taskId,users.get("owner-admin").id(),OWNER,OPERATOR,0);
+            require(mapper.submitAcceptance(taskId,0)==0 && mapper.completeTask(taskId,0)==0,
+                    "draft_task_accepted_submit_or_complete_mapper_transition");
+            // Set up only this synthetic task; do not claim this bypasses business eligibility checks.
+            require(jdbc.update("UPDATE inspection_task SET status='RUNNING' WHERE id=?",taskId)==1,
+                    "temporary_completion_fixture_not_running");
+            require(mapper.submitAcceptance(taskId,1)==0,"stale_submit_task_version_was_accepted");
+            require(mapper.completeTask(taskId,0)==0,"running_task_completed_without_waiting_state");
+            require(mapper.submitAcceptance(taskId,0)==1,"current_task_submit_mapper_transition_failed");
+            var waiting=mapper.findTask(taskId);
+            require(waiting!=null && "WAITING_ACCEPTANCE".equals(waiting.status())
+                            && waiting.lockVersion()==1 && waiting.completedAt()==null,
+                    "waiting_task_state_version_or_null_completion_time_not_preserved");
+            require(mapper.submitAcceptance(taskId,1)==0,"duplicate_submit_mapper_changed_waiting_task");
+            require(mapper.completeTask(taskId,0)==0,"stale_complete_task_version_was_accepted");
+            Instant before=mapper.databaseNow();
+            require(mapper.completeTask(taskId,1)==1,"current_task_complete_mapper_transition_failed");
+            Instant after=mapper.databaseNow();
+            var completed=mapper.findTask(taskId);
+            require(completed!=null && "COMPLETED".equals(completed.status())
+                            && completed.lockVersion()==2 && completed.completedAt()!=null,
+                    "completed_task_state_version_or_timestamp_not_preserved");
+            Instant at=completed.completedAt();
+            require(!at.isBefore(before) && !at.isAfter(after) && at.getNano()%1000000==0,
+                    "completion_time_is_not_database_utc_milliseconds");
+            LocalDateTime stored=jdbc.queryForObject("SELECT completed_at FROM inspection_task WHERE id=?",LocalDateTime.class,taskId);
+            require(stored!=null && at.equals(stored.toInstant(ZoneOffset.UTC)),
+                    "completion_mapper_instant_differs_from_stored_utc_datetime");
+            require(mapper.completeTask(taskId,2)==0 && mapper.completeTask(taskId,1)==0
+                            && mapper.submitAcceptance(taskId,2)==0,
+                    "terminal_task_mapper_repeated_or_reopened_completion");
+            var unchanged=mapper.findTask(taskId);
+            require(unchanged!=null && unchanged.lockVersion()==2 && at.equals(unchanged.completedAt())
+                            && "COMPLETED".equals(unchanged.status()),
+                    "rejected_terminal_mapper_updates_changed_completion_time");
+            return Map.of("productionSubmitAndCompleteMapperUpdatesVerified",true,
+                    "expectedStateAndLockVersionRequired",true,"completionTimestampWrittenOnce",true,
+                    "databaseUtcMillisecondsAndInstantMappingVerified",true,"rolledBack",true,
+                    "scope","Synthetic rollback-only production Mapper checks; service eligibility, roles and HTTP completion are verified separately.");
+        });
+        require(result!=null,"missing_task_completion_transition_result");
+        report.put("taskCompletionTransitions",result);
+    }
+
+    private void verifyAccessGrantConstraints(Map<String,Object> checks,String operatorUser,String taskId,Runnable validTask) {
+        String subtask=UUID.randomUUID().toString(),requirement=UUID.randomUUID().toString(),evidence=UUID.randomUUID().toString();
+        String execution=UUID.randomUUID().toString(),session=UUID.randomUUID().toString(),version=UUID.randomUUID().toString();
+        String applicant=UUID.randomUUID().toString(),approver=UUID.randomUUID().toString(),revoker=UUID.randomUUID().toString();
+        String grant=UUID.randomUUID().toString(),request=UUID.randomUUID().toString();
+        Runnable pending=()->{
+            validTask.run();insertSubtask(subtask,taskId);insertRequirement(requirement,evidence,taskId,subtask,1);
+            insertExecution(execution,subtask,"RUNNING",0,FIXED_UTC,null);
+            insertUploadSession(session,taskId,subtask,requirement,evidence,execution,operatorUser,UUID.randomUUID().toString());
+            insertEvidenceVersion(version,session,taskId,subtask,requirement,evidence,execution,operatorUser,null,1);
+            insertGrantUser(applicant,operatorUser);insertGrantUser(approver,users.get("owner-approver").id());
+            insertGrantUser(revoker,users.get("owner-approver").id());insertAccessGrant(grant,version,applicant,request);
+        };
+        Runnable approved=()->{pending.run();approveAccessGrant(grant,approver);};
+        Runnable rejected=()->{
+            pending.run();require(jdbc.update("""
+                    UPDATE access_grant SET status='REJECTED',approver_id=?,decided_at=UTC_TIMESTAMP(3),decision_reason='资料范围不符'
+                    WHERE id=?
+                    """,approver,grant)==1,"temporary_grant_rejection_not_saved");
+        };
+        Runnable revoked=()->{approved.run();revokeAccessGrant(grant,revoker);};
+        checks.put("duplicateGrantApplicantRequest",expectConstraint("duplicate_grant_applicant_request",1062,"23000",pending,
+                ()->insertAccessGrant(UUID.randomUUID().toString(),version,applicant,request)));
+        checks.put("invalidGrantRequestId",expectConstraint("invalid_grant_request_id",3819,"HY000",pending,
+                ()->jdbc.update("UPDATE access_grant SET client_request_id='not-a-uuid' WHERE id=?",grant)));
+        checks.put("invalidGrantRequestHash",expectConstraint("invalid_grant_request_hash",3819,"HY000",pending,
+                ()->jdbc.update("UPDATE access_grant SET request_hash=? WHERE id=?","A".repeat(64),grant)));
+        checks.put("grantExpiryMustBeDerived",expectConstraint("grant_expiry_must_be_derived",3819,"HY000",pending,
+                ()->jdbc.update("UPDATE access_grant SET status='EXPIRED' WHERE id=?",grant)));
+        checks.put("emptyGrantReason",expectConstraint("empty_grant_reason",3819,"HY000",pending,
+                ()->jdbc.update("UPDATE access_grant SET reason='' WHERE id=?",grant)));
+        checks.put("unicodeWhitespaceGrantReason",expectConstraint("unicode_whitespace_grant_reason",3819,"HY000",pending,
+                ()->jdbc.update("UPDATE access_grant SET reason=? WHERE id=?"," \t\n\u00a0\u3000",grant)));
+        checks.put("oversizedGrantReason",expectConstraint("oversized_grant_reason",1406,"22001",pending,
+                ()->jdbc.update("UPDATE access_grant SET reason=? WHERE id=?","申".repeat(1001),grant)));
+        checks.put("grantRequestMustEndAfterCreation",expectConstraint("grant_request_must_end_after_creation",3819,"HY000",pending,
+                ()->jdbc.update("UPDATE access_grant SET requested_valid_until=created_at WHERE id=?",grant)));
+        checks.put("negativeGrantLockVersion",expectConstraint("negative_grant_lock_version",3819,"HY000",pending,
+                ()->jdbc.update("UPDATE access_grant SET lock_version=-1 WHERE id=?",grant)));
+        checks.put("pendingGrantCannotHaveApprover",expectConstraint("pending_grant_cannot_have_approver",3819,"HY000",pending,
+                ()->jdbc.update("UPDATE access_grant SET approver_id=? WHERE id=?",approver,grant)));
+        checks.put("approvedGrantRequiresApprover",expectConstraint("approved_grant_requires_approver",3819,"HY000",approved,
+                ()->jdbc.update("UPDATE access_grant SET approver_id=NULL WHERE id=?",grant)));
+        checks.put("approvedGrantRequiresDecisionTime",expectConstraint("approved_grant_requires_decision_time",3819,"HY000",approved,
+                ()->jdbc.update("UPDATE access_grant SET decided_at=NULL WHERE id=?",grant)));
+        checks.put("approvedGrantRequiresValidUntil",expectConstraint("approved_grant_requires_valid_until",3819,"HY000",approved,
+                ()->jdbc.update("UPDATE access_grant SET valid_until=NULL WHERE id=?",grant)));
+        checks.put("rejectedGrantRequiresDecisionReason",expectConstraint("rejected_grant_requires_decision_reason",3819,"HY000",rejected,
+                ()->jdbc.update("UPDATE access_grant SET decision_reason=NULL WHERE id=?",grant)));
+        checks.put("rejectedGrantCannotHaveValidity",expectConstraint("rejected_grant_cannot_have_validity",3819,"HY000",rejected,
+                ()->jdbc.update("UPDATE access_grant SET valid_until=TIMESTAMPADD(MINUTE,5,UTC_TIMESTAMP(3)) WHERE id=?",grant)));
+        checks.put("grantDecisionCannotPrecedeRequest",expectConstraint("grant_decision_cannot_precede_request",3819,"HY000",approved,
+                ()->jdbc.update("UPDATE access_grant SET decided_at=TIMESTAMPADD(SECOND,-1,created_at) WHERE id=?",grant)));
+        checks.put("grantValidityMustFollowDecision",expectConstraint("grant_validity_must_follow_decision",3819,"HY000",approved,
+                ()->jdbc.update("UPDATE access_grant SET valid_until=decided_at WHERE id=?",grant)));
+        checks.put("grantValidityCannotExceedRequestedEnd",expectConstraint("grant_validity_cannot_exceed_requested_end",3819,"HY000",approved,
+                ()->jdbc.update("UPDATE access_grant SET valid_until=TIMESTAMPADD(SECOND,1,requested_valid_until) WHERE id=?",grant)));
+        checks.put("blankGrantDecisionReason",expectConstraint("blank_grant_decision_reason",3819,"HY000",approved,
+                ()->jdbc.update("UPDATE access_grant SET decision_reason=? WHERE id=?"," \t\u3000",grant)));
+        checks.put("pendingGrantCannotHaveRevocation",expectConstraint("pending_grant_cannot_have_revocation",3819,"HY000",pending,
+                ()->jdbc.update("UPDATE access_grant SET revoked_by=? WHERE id=?",revoker,grant)));
+        checks.put("revokedGrantRequiresRevoker",expectConstraint("revoked_grant_requires_revoker",3819,"HY000",revoked,
+                ()->jdbc.update("UPDATE access_grant SET revoked_by=NULL WHERE id=?",grant)));
+        checks.put("revokedGrantRequiresReason",expectConstraint("revoked_grant_requires_reason",3819,"HY000",revoked,
+                ()->jdbc.update("UPDATE access_grant SET revoke_reason=NULL WHERE id=?",grant)));
+        checks.put("revokedGrantRequiresTime",expectConstraint("revoked_grant_requires_time",3819,"HY000",revoked,
+                ()->jdbc.update("UPDATE access_grant SET revoked_at=NULL WHERE id=?",grant)));
+        checks.put("revocationCannotPrecedeDecision",expectConstraint("revocation_cannot_precede_decision",3819,"HY000",revoked,
+                ()->jdbc.update("UPDATE access_grant SET revoked_at=TIMESTAMPADD(SECOND,-1,decided_at) WHERE id=?",grant)));
+        checks.put("revocationMustPrecedeExpiry",expectConstraint("revocation_must_precede_expiry",3819,"HY000",revoked,
+                ()->jdbc.update("UPDATE access_grant SET revoked_at=valid_until WHERE id=?",grant)));
+        checks.put("blankGrantRevokeReason",expectConstraint("blank_grant_revoke_reason",3819,"HY000",revoked,
+                ()->jdbc.update("UPDATE access_grant SET revoke_reason=? WHERE id=?","\t\u00a0\u3000",grant)));
+        checks.put("danglingGrantVersion",expectConstraint("dangling_grant_version",1452,"23000",pending,
+                ()->jdbc.update("UPDATE access_grant SET version_id=? WHERE id=?",UUID.randomUUID().toString(),grant)));
+        checks.put("danglingGrantApplicant",expectConstraint("dangling_grant_applicant",1452,"23000",pending,
+                ()->jdbc.update("UPDATE access_grant SET applicant_id=? WHERE id=?",UUID.randomUUID().toString(),grant)));
+        checks.put("danglingGrantApprover",expectConstraint("dangling_grant_approver",1452,"23000",approved,
+                ()->jdbc.update("UPDATE access_grant SET approver_id=? WHERE id=?",UUID.randomUUID().toString(),grant)));
+        checks.put("danglingGrantRevoker",expectConstraint("dangling_grant_revoker",1452,"23000",revoked,
+                ()->jdbc.update("UPDATE access_grant SET revoked_by=? WHERE id=?",UUID.randomUUID().toString(),grant)));
+        checks.put("restrictGrantedVersionDeletion",expectConstraint("restrict_granted_version_deletion",1451,"23000",pending,
+                ()->jdbc.update("DELETE FROM evidence_version WHERE id=?",version)));
+        checks.put("restrictGrantApplicantDeletion",expectConstraint("restrict_grant_applicant_deletion",1451,"23000",pending,
+                ()->jdbc.update("DELETE FROM app_user WHERE id=?",applicant)));
+        checks.put("restrictGrantApproverDeletion",expectConstraint("restrict_grant_approver_deletion",1451,"23000",approved,
+                ()->jdbc.update("DELETE FROM app_user WHERE id=?",approver)));
+        checks.put("restrictGrantRevokerDeletion",expectConstraint("restrict_grant_revoker_deletion",1451,"23000",revoked,
+                ()->jdbc.update("DELETE FROM app_user WHERE id=?",revoker)));
+        Map<String,Object> result=transactions.execute(transaction->{
+            transaction.setRollbackOnly();pending.run();
+            require(jdbc.update("UPDATE access_grant SET reason=? WHERE id=?","申".repeat(1000),grant)==1,
+                    "temporary_maximum_grant_reason_not_saved");
+            String approvedId=UUID.randomUUID().toString(),rejectedId=UUID.randomUUID().toString(),revokedId=UUID.randomUUID().toString();
+            insertAccessGrant(approvedId,version,applicant,UUID.randomUUID().toString());approveAccessGrant(approvedId,approver);
+            require(jdbc.update("UPDATE access_grant SET decision_reason=? WHERE id=?","批".repeat(1000),approvedId)==1,
+                    "temporary_maximum_decision_reason_not_saved");
+            insertAccessGrant(rejectedId,version,applicant,UUID.randomUUID().toString());
+            require(jdbc.update("UPDATE access_grant SET status='REJECTED',approver_id=?,decided_at=UTC_TIMESTAMP(3),decision_reason='不批准' WHERE id=?",
+                    approver,rejectedId)==1,"temporary_positive_rejection_not_saved");
+            insertAccessGrant(revokedId,version,applicant,UUID.randomUUID().toString());approveAccessGrant(revokedId,approver);revokeAccessGrant(revokedId,revoker);
+            require(jdbc.update("UPDATE access_grant SET revoke_reason=? WHERE id=?","撤".repeat(1000),revokedId)==1,
+                    "temporary_maximum_revocation_reason_not_saved");
+            String expired=UUID.randomUUID().toString();insertAccessGrant(expired,version,applicant,UUID.randomUUID().toString());approveAccessGrant(expired,approver);
+            require(jdbc.update("""
+                    UPDATE access_grant SET created_at=TIMESTAMPADD(HOUR,-2,UTC_TIMESTAMP(3)),
+                        requested_valid_until=TIMESTAMPADD(HOUR,-1,UTC_TIMESTAMP(3)),
+                        decided_at=TIMESTAMPADD(MINUTE,-100,UTC_TIMESTAMP(3)),valid_until=TIMESTAMPADD(MINUTE,-90,UTC_TIMESTAMP(3))
+                    WHERE id=?
+                    """,expired)==1,"temporary_expired_approved_grant_not_saved");
+            insertAccessGrant(UUID.randomUUID().toString(),version,approver,request);
+            require(Long.valueOf(6).equals(jdbc.queryForObject("SELECT COUNT(*) FROM access_grant WHERE version_id=?",Long.class,version)),
+                    "positive_grant_state_rows_not_preserved");
+            require(Long.valueOf(1).equals(jdbc.queryForObject("SELECT COUNT(*) FROM access_grant WHERE id=? AND status='APPROVED' AND valid_until<=UTC_TIMESTAMP(3)",
+                    Long.class,expired)),"grant_expiry_must_remain_derived_from_approved_row");
+            require(Long.valueOf(2).equals(jdbc.queryForObject("SELECT COUNT(*) FROM access_grant WHERE version_id=? AND client_request_id=?",Long.class,version,request)),
+                    "different_applicants_cannot_reuse_independent_request_keys");
+            require(Long.valueOf(1).equals(jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM access_grant WHERE id=? AND CHAR_LENGTH(reason)=1000
+                      AND created_at<=UTC_TIMESTAMP(3) AND created_at>=TIMESTAMPADD(MINUTE,-1,UTC_TIMESTAMP(3))
+                    """,Long.class,grant)),"maximum_grant_reason_or_database_utc_default_not_preserved");
+            require(Integer.valueOf(1000).equals(jdbc.queryForObject("SELECT CHAR_LENGTH(decision_reason) FROM access_grant WHERE id=?",Integer.class,approvedId))
+                            &&Integer.valueOf(1000).equals(jdbc.queryForObject("SELECT CHAR_LENGTH(revoke_reason) FROM access_grant WHERE id=?",Integer.class,revokedId)),
+                    "maximum_grant_decision_or_revoke_reason_not_preserved");
+            return Map.of("allFourPersistedStatesAccepted",true,"expiryDerivedWithoutStateRewrite",true,
+                    "applicantRequestKeyScopeVerified",true,"maximumUnicodeReasonsPreserved",true,
+                    "databaseUtcDefaultVerified",true,"rolledBack",true,
+                    "scope","Synthetic schema-only grant fixtures; live permissions, CAS and signed downloads are verified separately.");
+        });
+        require(result!=null,"missing_access_grant_round_trip_result");report.put("accessGrantRoundTrip",result);
+    }
+
+    private void insertGrantUser(String id,String source) {
+        require(jdbc.update("""
+                INSERT INTO app_user(id,org_id,username,password_hash,roles)
+                SELECT ?,org_id,?,password_hash,roles FROM app_user WHERE id=?
+                """,id,"T020-grant-"+UUID.randomUUID(),source)==1,"temporary_grant_user_not_inserted");
+    }
+    private void insertAccessGrant(String id,String version,String applicant,String request) {
+        require(jdbc.update("""
+                INSERT INTO access_grant(id,version_id,applicant_id,client_request_id,request_hash,reason,requested_valid_until)
+                VALUES(?,?,?,?,?,'请求共享固定版本',TIMESTAMPADD(HOUR,1,UTC_TIMESTAMP(3)))
+                """,id,version,applicant,request,"a".repeat(64))==1,"temporary_access_grant_not_inserted");
+    }
+    private void approveAccessGrant(String id,String approver) {
+        require(jdbc.update("""
+                UPDATE access_grant SET status='APPROVED',approver_id=?,decided_at=UTC_TIMESTAMP(3),
+                    valid_until=TIMESTAMPADD(MINUTE,10,UTC_TIMESTAMP(3)),lock_version=lock_version+1 WHERE id=?
+                """,approver,id)==1,"temporary_access_grant_not_approved");
+    }
+    private void revokeAccessGrant(String id,String revoker) {
+        require(jdbc.update("""
+                UPDATE access_grant SET status='REVOKED',revoked_by=?,revoke_reason='撤销固定版本共享',
+                    revoked_at=UTC_TIMESTAMP(3),lock_version=lock_version+1 WHERE id=?
+                """,revoker,id)==1,"temporary_access_grant_not_revoked");
+    }
+
     private void verifyOutboxLeaseTransitions(OutboxMapper mapper) {
         Map<String, Object> result = transactions.execute(transaction -> {
             transaction.setRollbackOnly();
@@ -1225,12 +1814,21 @@ public final class DatabaseProbe {
         boolean originalElevenBaseline = ORIGINAL_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
         boolean originalFourteenBaseline = PREVIOUS_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
         boolean originalFifteenBaseline = ORIGINAL_FIFTEEN_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
-        boolean olderBaseline = originalElevenBaseline || originalFourteenBaseline || originalFifteenBaseline;
+        boolean originalSixteenBaseline = ORIGINAL_SIXTEEN_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
+        boolean originalSeventeenBaseline = ORIGINAL_SEVENTEEN_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
+        boolean originalEighteenBaseline = ORIGINAL_EIGHTEEN_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
+        boolean originalTwentyBaseline = ORIGINAL_TWENTY_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
+        boolean olderBaseline = originalElevenBaseline || originalFourteenBaseline || originalFifteenBaseline
+                || originalSixteenBaseline || originalSeventeenBaseline || originalEighteenBaseline || originalTwentyBaseline;
         require(olderBaseline || SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain")),
                 "comparison_unknown_snapshot_domain");
         String snapshotField = originalElevenBaseline ? "originalElevenSnapshotSha256"
                 : originalFourteenBaseline ? "originalFourteenSnapshotSha256"
-                : originalFifteenBaseline ? "originalFifteenSnapshotSha256" : "businessSnapshotSha256";
+                : originalFifteenBaseline ? "originalFifteenSnapshotSha256"
+                : originalSixteenBaseline ? "originalSixteenSnapshotSha256"
+                : originalSeventeenBaseline ? "originalSeventeenSnapshotSha256"
+                : originalEighteenBaseline ? "originalEighteenSnapshotSha256"
+                : originalTwentyBaseline ? "originalTwentySnapshotSha256" : "businessSnapshotSha256";
         Object actualSnapshot = report.get(snapshotField);
         require(previous.get("businessSnapshotSha256") != null && previous.get("businessSnapshotSha256").equals(actualSnapshot),
                 "comparison_changed_businessSnapshotSha256");

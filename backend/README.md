@@ -1,6 +1,6 @@
 # 后端工程
 
-Spring Boot 4.1.1、Java 21、Maven 单工程。已实现 HTTP 基础能力、Gateway 适配、MySQL/MyBatis/Flyway、用户认证、T009 任务与初始执行，以及 T010 私有对象存储、持久上传会话与分片幂等；T011 已接入完整文件校验、异步定版和 RabbitMQ Outbox。T012 已接入真实 Fabric 存证消费、二进制交易检查点与 UNKNOWN 恢复；T013 已接入存储文件与上传副本的实际字节核验及核验历史；T014 可保留、可重查的最小真实闭环演示已验收通过，M2 已通过，下一项为 T015 设备管理与上报。实际证据见验证记录。
+Spring Boot 4.1.1、Java 21、Maven 单工程。已实现 HTTP 基础能力、Gateway 适配、MySQL/MyBatis/Flyway、用户认证、T009 任务与初始执行，以及 T010 私有对象存储、持久上传会话与分片幂等；T011 已接入完整文件校验、异步定版和 RabbitMQ Outbox。T012 已接入真实 Fabric 存证消费、二进制交易检查点与 UNKNOWN 恢复；T013 已接入存储文件与上传副本的实际字节核验及核验历史；T014 可保留、可重查的最小真实闭环演示已验收通过，M2 已通过；T015 设备管理、独立设备身份、心跳进度及设备上传已验收通过，T016 集群模拟、CAS 换机与历史批次隔离已通过真实验收；T017 多分片续传与独立版本归档也已通过，T018 固定版本异常与人工复核也已通过真实验收，T019 正式提交验收与任务完成已通过真实 Fabric 确认验收，T020 精确版本共享与受控下载也已通过真实验收，T021 审计查询与证据关系整合已通过真实验收，M3 业务补齐通过；下一项为 M4 的 T022 Outbox、消费幂等与死信完善。实际证据见验证记录。
 
 ## 构建与运行
 
@@ -37,7 +37,7 @@ storage 需要显式提供 S3_ENDPOINT、S3_ACCESS_KEY、S3_SECRET_KEY，使用 
 
 database profile 启用 Hikari、MyBatis 与 Flyway。连接会话使用 UTC 和 READ COMMITTED，Connector/J 默认 sslMode=REQUIRED；生产部署可通过 DB_SSL_MODE 配置更严格的证书校验。普通 local/prod 启动不启用 database 时排除这些自动配置，原 HTTP/Gateway 探针可独立运行。MyBatis SQL 参数日志关闭，local-cache-scope=STATEMENT，锁后权限与成员关系重查不会复用同事务中较早的 SESSION 缓存。
 
-首版迁移 V1__identity_and_task_scope.sql 建立 organization、app_user、inspection_task、task_member、drone 五张表，并创建两个固定机构。roles JSON、机构角色白名单、唯一用户名、创建人机构、设备摘要及外键由数据库约束；username 区分大小写。T008 新增 V2__identity_audit.sql 建立 audit_log；T009 新增 V3__task_execution_scope.sql 建立 inspection_subtask、material_requirement、task_execution。V3 的复合外键限制资料项与子任务属于同一任务、currentExecutionId 属于当前子任务，并以唯一约束限制一个子任务只有一个 READY/RUNNING 批次。T010 新增 V4__upload_sessions_and_versions.sql，建立 upload_session、upload_part、evidence_version；复合外键固定资料项、证据编号、任务、子任务和执行作用域，唯一约束保证主体请求键、分片号和未来版本号不重复。T010 当时不插入 evidence_version；T011 的 V5__finalization_outbox_and_submission.sql 新增 outbox_event、consumed_event、chain_submission，提供事件派发、消费回执和待存证状态。T012 追加 V6__chain_attempts.sql，建立 chain_attempt 保存原 Fabric 交易与确认请求检查点；T013 追加 V7__verification_records.sql，建立 verification_record 保存实际摘要、链上摘要、核验来源、结果及原因；V1～V6 保持不变。Flyway 校验开启，自动 baseline 和 clean 关闭，不使用 schema.sql/data.sql；后续结构变化继续追加迁移。
+首版迁移 V1__identity_and_task_scope.sql 建立 organization、app_user、inspection_task、task_member、drone 五张表，并创建两个固定机构。roles JSON、机构角色白名单、唯一用户名、创建人机构、设备摘要及外键由数据库约束；username 区分大小写。T008 新增 V2__identity_audit.sql 建立 audit_log；T009 新增 V3__task_execution_scope.sql 建立 inspection_subtask、material_requirement、task_execution。V3 的复合外键限制资料项与子任务属于同一任务、currentExecutionId 属于当前子任务，并以唯一约束限制一个子任务只有一个 READY/RUNNING 批次。T010 新增 V4__upload_sessions_and_versions.sql，建立 upload_session、upload_part、evidence_version；复合外键固定资料项、证据编号、任务、子任务和执行作用域，唯一约束保证主体请求键、分片号和未来版本号不重复。T010 当时不插入 evidence_version；T011 的 V5__finalization_outbox_and_submission.sql 新增 outbox_event、consumed_event、chain_submission，提供事件派发、消费回执和待存证状态。T012 追加 V6__chain_attempts.sql，建立 chain_attempt 保存原 Fabric 交易与确认请求检查点；T013 追加 V7__verification_records.sql，建立 verification_record 保存实际摘要、链上摘要、核验来源、结果及原因；T015 追加 V8__device_reports.sql，建立设备事件去重与执行归属约束；T016 追加 V9__execution_adjustments.sql，保存换机前后批次、操作者、原因及数据库时间，T018 追加 V10__issues_and_reviews.sql，建立固定版本异常 issue 与唯一结论 review_record；T020 追加 V11__version_access_grants.sql，新增精确版本共享 access_grant；V1～V10 历史迁移保持不变。Flyway 校验开启，自动 baseline 和 clean 关闭，不使用 schema.sql/data.sql；后续结构变化继续追加迁移。
 
 demo 必须同时包含 local、database，任何包含 prod 的组合都会被应用自身拒绝。初始化在一个事务中创建以下账号与一台 UAV-DEMO-001，不预造任务、成员、文件或成功状态：
 
@@ -50,11 +50,11 @@ demo 必须同时包含 local、database，任何包含 prod 的组合都会被�
 | operator-user | OrgB | OPERATOR_USER |
 | operator-outsider | OrgB | OPERATOR_USER，预留无任务范围用例 |
 
-随机密码和设备令牌只保存在忽略提交的 .local/demo-credentials.json（0600）；脚本不打印它们，也不覆盖已有文件。数据库保存 cost=12 的 BCrypt 摘要和设备令牌 SHA-256。重复初始化核对固定身份和原凭据，保留合法的已修改角色、版本、启用状态及其他业务数据；不会把角色恢复为上表初始值。固定身份或凭据不匹配时拒绝覆盖。应保留原凭据文件，不能靠删除它来重置账号。登录接口已实现，设备认证接口在 T015 接入。
+随机密码和设备令牌只保存在忽略提交的 .local/demo-credentials.json（0600）；脚本不打印它们，也不覆盖已有文件。数据库保存 cost=12 的 BCrypt 摘要和设备令牌 SHA-256。重复初始化核对固定身份和原凭据，保留合法的已修改角色、版本、启用状态及其他业务数据；不会把角色恢复为上表初始值。固定身份或凭据不匹配时拒绝覆盖。应保留原凭据文件，不能靠删除它来重置账号。登录接口及 T015 设备认证均已接入；设备身份与用户 JWT 独立。
 
 T007 当时的真实验证使用数据库探针三个独立进程：migrate 不启用 demo；seed 初始化并核对 Mapper 结果；verify 再次启动，比较五张表全部字段的摘要及凭据文件，执行 24 项约束拒绝检查和 UTC 时间往返。所有临时任务、成员及字段修改均回滚，验证后为 2 个机构、6 个用户、0 个任务/成员和 1 台设备。JVM 使用 Asia/Shanghai，固定毫秒时间仍按 UTC 保存和读取。
 
-数据库探针现已支持 V1～V7，比较七版迁移校验和及十六张业务表完整快照，执行 110 项真实约束检查及 UTC 往返；探针写入均回滚。最新成功报告由 .local/database-probe/latest.json 指向，T007 的 24 项约束及五表历史证据继续保留在 [验证记录](../docs/verification.md)。需要再次检查时执行 `python3 deploy/scripts/verify-database.py`。探针要求当前演示基线，后续业务数据变化时需更新相应验收用例。后端测试和显式真实探针分别执行，普通 Maven 构建不自动连接 MySQL、S3 或提交链交易。
+数据库探针现已支持 V1～V11，比较十一版迁移校验和及二十一张业务表完整快照，包含 206 项真实约束检查及完成状态 CAS、UTC 往返；探针写入均回滚。最新成功报告由 .local/database-probe/latest.json 指向，T007 的 24 项约束及五表历史证据继续保留在 [验证记录](../docs/verification.md)。需要再次检查时执行 `python3 deploy/scripts/verify-database.py`。探针要求当前演示基线，后续业务数据变化时需更新相应验收用例。后端测试和显式真实探针分别执行，普通 Maven 构建不自动连接 MySQL、S3 或提交链交易。
 
 ## 用户认证与角色管理（T008）
 
@@ -118,11 +118,11 @@ TaskDetail 保持平铺任务字段，并包含 members、requirements、subtask
 
 资料要求维护是整个列表替换：已有项传原 id，保留 evidenceId、子任务绑定及版本分配信息；新增项省略 id，由后端分别生成资料编号与稳定证据编号。仅能删除未绑定项，遗漏已绑定项会返回 409；不接受其他任务的资料编号。运营商创建子任务只绑定资料项，不能改变要求内容。启动后要求冻结，名称、必交标志或绑定不能通过这些接口修改。
 
-初次分配仅限 ASSIGNED：创建一个 READY 批次并设置子任务 currentExecutionId，同时增加子任务和任务版本。已有当前批次或版本过期返回 409，不产生重复执行；未知、停用或归属不符的初始设备返回 400。运行中换机在 T016 接入。
+初次分配仅限 ASSIGNED：创建一个 READY 批次并设置子任务 currentExecutionId，同时增加子任务和任务版本。已有当前批次或版本过期返回 409，不产生重复执行；未知、停用或归属不符的初始设备返回 400。T016 已实现运行中换机：同一路由在 RUNNING / WAITING_ACCEPTANCE 下使用子任务 CAS，必须填写原因并选择不同的启用设备，旧批次 CLOSED、新批次 RUNNING/progress=0；真实集成验收见下文。
 
 启动前必须至少有一个子任务，每个子任务至少绑定一个 required=true 的资料项，所有资料均已绑定本任务子任务，每个子任务都有当前 READY 批次且设备仍启用、归属正确。不满足条件返回 409；包括只有可选资料、仍有未绑定资料或 READY 设备被停用。启动复用原批次 id，将原批次变为 RUNNING，写 UTC startedAt，并增加任务、子任务及执行版本，不重新插入批次。重复启动或陈旧 expectedLockVersion 返回 409。
 
-所有写操作与成功审计使用同一数据库事务。已有任务先取得父任务行锁，随后处理子任务和资料；初次分配锁定所选设备，启动按去重后的设备编号排序获取行锁，避免不同任务以相反次序锁同一组设备。审计动作共七类：TASK_CREATED、TASK_REQUIREMENTS_UPDATED、TASK_ASSIGNED、TASK_MEMBERS_UPDATED、SUBTASK_CREATED、EXECUTION_CREATED、TASK_STARTED；除 EXECUTION_CREATED 关联 TASK_EXECUTION 外，其余关联 INSPECTION_TASK。审计只保存安全元数据，CAS 或审计失败回滚本次变更。
+所有写操作与成功审计使用同一数据库事务。已有任务先取得父任务行锁，随后处理子任务和资料；初次分配锁定所选设备，启动按去重后的设备编号排序获取行锁，避免不同任务以相反次序锁同一组设备。T009 的审计动作共七类：TASK_CREATED、TASK_REQUIREMENTS_UPDATED、TASK_ASSIGNED、TASK_MEMBERS_UPDATED、SUBTASK_CREATED、EXECUTION_CREATED、TASK_STARTED；除 EXECUTION_CREATED 关联 TASK_EXECUTION 外，其余关联 INSPECTION_TASK。T016 换机追加 EXECUTION_ADJUSTED，关联新 TASK_EXECUTION。审计只保存安全元数据，CAS 或审计失败回滚本次变更。
 
 手动执行 [examples/t009.http](../examples/t009.http) 可从登录开始创建并保留一条真实任务，供后续上传示例使用。真实验收使用隔离测试账号、设备及任务，MySQL 和 JWT 配置沿用上述启动方式：
 
@@ -135,7 +135,7 @@ python3 deploy/scripts/verify-tasks.py
 
 ## 私有对象存储与上传会话（T010）
 
-上传接口要求同时启用 database、storage，统一使用 Bearer 令牌和 `/api/v1` 前缀。当前支持用户上传：调用者必须有 OrgB 的 OPERATOR_USER 角色、属于任务成员，读取或写入已有会话还必须是该会话创建者。只有 OPERATOR_TASK_ADMIN 或 ORG_ADMIN 不具上传权限；另一位任务成员也不能读取别人的会话。设备凭据上传在 T015 接入。
+上传接口要求同时启用 database、storage，统一使用 Bearer 令牌和 `/api/v1` 前缀。当前支持用户上传：调用者必须有 OrgB 的 OPERATOR_USER 角色、属于任务成员，读取或写入已有会话还必须是该会话创建者。只有 OPERATOR_TASK_ADMIN 或 ORG_ADMIN 不具上传权限；另一位任务成员也不能读取别人的会话。T015 的设备凭据上传使用独立的 /device/upload-sessions 路径，见下文。
 
 | 方法与路径 | 请求 | 返回 |
 | --- | --- | --- |
@@ -143,19 +143,19 @@ python3 deploy/scripts/verify-tasks.py
 | PUT /upload-sessions/{id}/parts/{partNo} | Content-Type: application/octet-stream，正文直接传分片原始字节 | uploadId、partNo、实际 size、服务端计算的 sha256 |
 | GET /upload-sessions/{id} | 无正文 | 从 MySQL 读取的会话进度，uploadedParts 按分片号排列 |
 
-编号必须是规范小写 UUID；clientRequestId 表示一次逻辑上传，重试时保留原值。filename 只能是文件名，长度不超过 255，不能包含路径或控制字符。contentType 新增为必填字段，必须与允许的文件扩展名匹配；支持 JPEG、PNG、PDF、MP4，首片再检查文件签名与声明是否一致。size 是声明的完整文件字节数，必须为正且不超过配置上限。服务固定资料项与执行批次的作用域，并要求当前任务、子任务和批次允许上传，不能借其他任务或旧批次编号写入。
+编号必须是规范小写 UUID；clientRequestId 表示一次逻辑上传，重试时保留原值。filename 只能是文件名，长度不超过 255，不能包含路径或控制字符。contentType 新增为必填字段，必须与允许的文件扩展名匹配；支持 JPEG、PNG、PDF、MP4，首片再检查文件签名与声明是否一致。size 是声明的完整文件字节数，必须为正且不超过配置上限。服务固定资料项与执行批次的作用域，并要求当前任务、子任务和批次允许上传，不能借其他任务编号或他机批次写入。当前 RUNNING 批次可以正常上传；原分配设备或有权限的用户可对同任务原 CLOSED 批次新建、续传和完成会话，固定版本保留原执行编号，只作为历史资料。
 
 默认文件上限 200 MiB、分片大小 8 MiB、会话有效期 24 小时。partNo 从 1 开始，partCount=ceil(size/partSize)；除最后一片外必须恰好为 partSize，最后一片必须恰好为剩余长度。支持先传后续分片，再按 GET 返回的已提交分片补传缺失部分；正文使用原始字节，不使用 multipart/form-data。短片返回 400、超长片返回 413，格式或文件签名不符返回 400。
 
 幂等键为 actorType、actorId、clientRequestId。同键且全部创建参数相同，返回原会话及原 expiresAt，不延长有效期；参数不同返回 409 IDEMPOTENCY_CONFLICT。同一分片号、相同长度和摘要返回原分片，不重复插入或记录成功审计；内容不同返回 409 PART_CONTENT_CONFLICT。并发提交仍只保留一条会话或分片记录。新会话和新分片分别记录 UPLOAD_SESSION_CREATED、UPLOAD_PART_STORED 安全审计。
 
-过期会话不能继续写片，返回 409 UPLOAD_SESSION_EXPIRED；VERIFYING 等冻结状态返回 409 UPLOAD_NOT_WRITABLE，已完成任务返回 409 TASK_COMPLETED。GET 仍可查看进度，尚为 UPLOADING 但已到期的会话对外显示 EXPIRED。每次写入在数据库锁下重新核对账号、成员、会话所有者及当前批次，成员移除或批次变化后，旧会话不能绕过权限继续写入。
+过期会话不能继续写片，返回 409 UPLOAD_SESSION_EXPIRED；VERIFYING 等冻结状态返回 409 UPLOAD_NOT_WRITABLE，已完成任务返回 409 TASK_COMPLETED。GET 仍可查看进度，尚为 UPLOADING 但已到期的会话对外显示 EXPIRED。每次写入在数据库锁下重新核对账号、成员、会话所有者及执行归属。成员移除、设备禁用或其他权限变化会阻断写入；人工换机后的原 CLOSED 会话可受控续传，不能修改所属执行，也不能借补传覆盖当前批次资料。
 
 S3 客户端固定使用 AWS SDK 2.56.0、UrlConnectionHttpClient，默认采用 path style。请求和响应 checksum 策略均设为 WHEN_REQUIRED，以兼容 Garage；应用自己计算并持久化每片 SHA-256。客户端通过 RequestBody.fromFile 重开稳定文件，重试不依赖已消费的流。S3_ENDPOINT、S3_ACCESS_KEY、S3_SECRET_KEY 必须显式提供；S3_REGION 默认 garage，S3_BUCKET 默认 uav-evidence，S3_FORCE_PATH_STYLE 默认 true。上传限制通过 UPLOAD_MAX_FILE_SIZE、UPLOAD_PART_SIZE、UPLOAD_SESSION_TTL_SECONDS、UPLOAD_ALLOWED_EXTENSIONS 配置；临时目录默认 `.local/uploads/tmp`，可用 UPLOAD_TEMP_DIRECTORY 和 UPLOAD_MIN_FREE_SPACE 调整目录及最低剩余空间。
 
 HTTP 接收分片时使用 0600 临时文件，按长度上限流式读取、计数和计算摘要；S3 网络写入在数据库事务外进行，每个候选对象使用独立服务端键。短事务重新验证作用域并提交分片引用，已确认未引用的候选对象删除。数据库提交结果不明时保留对象，避免删掉可能已提交的引用；孤儿扫描与故障恢复在 T025 完善。私有桶不开放匿名读取，上传响应和审计不返回 objectKey、私钥、S3 凭据或 JWT；对象存储故障统一返回 503。
 
-完成所有分片后仍为 UPLOADING，versionId=null；调用下文 T011 完成接口后进入异步校验和定版。仅启用 database,storage 可继续使用 T010 会话与分片接口；完成接口及 Worker 还需要 messaging。历史批次隔离在 T016、多机业务验收及清理恢复在 T017、T025 继续完成；单片上传到真实核验的闭环见下文 T014。
+完成所有分片后仍为 UPLOADING，versionId=null；调用下文 T011 完成接口后进入异步校验和定版。仅启用 database,storage 可继续使用 T010 会话与分片接口；完成接口及 Worker 还需要 messaging。T016 已实现历史批次隔离，T017 多分片与版本归档已验收通过，孤立对象清理与完整恢复在 T025 等后续任务完善；单片上传到真实核验的闭环见下文 T014。
 
 手动执行 [examples/t010.http](../examples/t010.http)，其中使用 [79 字节示例 PNG](../examples/files/inspection-sample.png)。先运行 [examples/t009.http](../examples/t009.http) 创建并启动真实任务，再按上传示例为 operator-user 加入任务成员；保留 operator-admin 及委托方成员。真实密码和令牌只保存在本地忽略提交的 REST Client 环境中。MySQL、Garage 私有桶和原 .env 已就绪、JDK 21 已选择后，可执行：
 
@@ -215,10 +215,10 @@ EVIDENCE_ANCHOR_REQUESTED 的 bizId 定位 chain_submission，消费者领取数
 
 | 方法与路径 | 返回 | 权限 |
 | --- | --- | --- |
-| GET /evidence-versions/{id} | 固定版本 metadata、完整 SHA-256、reviewStatus 和 anchor | 相应机构业务角色且是任务成员 |
+| GET /evidence-versions/{id} | 固定版本 metadata、完整 SHA-256、reviewStatus 和 anchor | 任务业务成员，或 T020 的有效精确版本共享授权 |
 | GET /evidence-versions/{id}/anchor | status、confirmedTxId、confirmedBy、retryCount、nextActionAt、安全 lastError，以及原 transactionId/attemptPhase/validationCode/blockNumber | 与版本详情一致 |
 
-版本详情包含 id、evidenceId、versionNo、requirementId、taskId、subtaskId、executionId、filename、contentType、size、sha256、reviewStatus、createdAt、anchor。响应不包含 S3 对象键、下载链接、私钥、证书、transactionBytes 或 commitBytes。ORG_ADMIN 不自动具备证据读取权限；业务角色仍需任务成员身份。未知和不可访问版本统一返回 403，格式错误编号返回 400，匿名或失效身份返回 401。接口查询数据库状态，原文件与上传副本的实际字节核验已由下文 T013 接入。
+版本详情包含 id、evidenceId、versionNo、requirementId、taskId、subtaskId、executionId、filename、contentType、size、sha256、reviewStatus、createdAt、anchor。响应不包含 S3 对象键、下载链接、私钥、证书、transactionBytes 或 commitBytes。ORG_ADMIN 不自动具备证据读取权限；任务路径仍要求业务角色和成员身份，T020 的有效精确版本共享提供独立读取路径。未知和不可访问版本统一返回 403，格式错误编号返回 400，匿名或失效身份返回 401。接口查询数据库状态，原文件与上传副本的实际字节核验已由下文 T013 接入。
 
 手动调用见 [examples/t012.http](../examples/t012.http)。先按 T009～T011 创建真实任务并完成上传，从会话进度取得 versionId，再轮询 `/anchor`。COMPLETED 只表示文件定版，最终应以 anchor.status=CONFIRMED 与 confirmedTxId 判断链上登记是否已被核对。
 
@@ -235,7 +235,7 @@ python3 deploy/scripts/verify-anchor.py
 
 ## 存储文件、上传副本与核验历史（T013）
 
-核验接口同时启用 database、storage、ledger，正常业务启动仍使用 `python3 deploy/scripts/run-backend.py --demo --ledger`。调用者必须是该版本所属任务的当前成员，并具本机构适用业务角色；ORG_ADMIN 单独不具核验权限。存储读取、摘要计算与链查询不持有数据库事务，结果写入前再读取并校验当前账号、tokenVersion、角色和成员关系。I/O 期间失去权限时返回 401/403，不保存或披露本次核验结果。
+核验接口同时启用 database、storage、ledger，正常业务启动仍使用 `python3 deploy/scripts/run-backend.py --demo --ledger`。任务路径调用者须为当前业务成员；T020 也允许持有效精确版本授权的注册用户核验该版本，ORG_ADMIN 不会自动获得额外权限。存储读取、摘要计算与链查询不持有数据库事务，结果写入前再读取并校验当前账号、tokenVersion 及本次任务或共享权限。I/O 期间失去权限时返回 401/403，不保存或披露本次核验结果。
 
 | 方法与路径 | 输入 | 返回 |
 | --- | --- | --- |
@@ -303,6 +303,40 @@ recheck 保留原目录，在其 `rechecks/<recheckId>/` 下写新报告。它�
 
 脚本不覆盖 .env 或演示凭据，不在结束时删除保留的业务成果。执行失败时写阶段报告并保留已取得的资源编号，不盲目重试未知结果的业务 POST；先根据私有日志及资源进度处理未完成阶段，再决定后续动作。完整演示步骤与验收证据见 [M2 演示说明](../docs/m2-demo.md) 和 [验证记录](../docs/verification.md)。
 
+## 设备管理、独立认证与上报（T015）
+
+设备管理由 database profile 提供，要求 OrgB 的 OPERATOR_TASK_ADMIN；ORG_ADMIN 单独不获得设备管理权限。创建只接受 code，服务端固定 operatorOrgId，生成 64 位小写十六进制 deviceToken，仅在创建响应中返回一次。MySQL 保存令牌 SHA-256，后续列表和详情只返回安全设备信息；重复代码返回 409，不通过再次创建取回令牌。
+
+| 方法与路径 | 请求及返回 |
+| --- | --- |
+| POST /api/v1/drones | `{code}`；返回 `{device,deviceToken}`，deviceToken 应立即保存在本地安全位置 |
+| GET /api/v1/drones | page、pageSize；返回 items/page/pageSize/total |
+| GET /api/v1/drones/{id} | 返回 id、operatorOrgId、code、enabled、lastSeenAt、online、lockVersion、createdAt、updatedAt |
+| PATCH /api/v1/drones/{id}/enabled | enabled、expectedLockVersion；CAS 冲突返回 409，成功递增版本 |
+
+设备请求使用 `X-Device-Id` 与 `X-Device-Token`，不使用用户 JWT。账号角色不能充当设备身份，设备令牌也不能访问用户、复核或共享接口。每次设备操作读取 MySQL 确认设备存在、启用且摘要匹配；停用后立即失效，包括重放旧事件。设备认证失败返回 401 和 `WWW-Authenticate: Device`，用户接口仍使用 Bearer。
+
+`POST /api/v1/device/reports` 接收 bootId、seq、eventId、executionId、type；PROGRESS 还必须提供 0～100 的 progress，HEARTBEAT 不接受 progress。UUID 必须规范小写，seq 必须为 JSON 整数，范围为 0～9007199254740991。设备可上报分配给自己的当前 RUNNING 批次；同一活动任务中，原设备也可对非当前 CLOSED 批次记录历史事件并刷新自身在线时间，旧执行与当前执行的 progress 均保持不变。他机或不可访问执行返回 403，其他不允许状态返回 409。
+
+事件去重键为 `(droneId,bootId,seq)` 和 `(droneId,eventId)`。相同键、相同内容返回原 id、receivedAt、progress 与当时的 executionProgress 快照，并将 duplicate 标为 true；不插入事件、不刷新 MySQL lastSeenAt 或 Redis TTL。相同键而内容不同返回 409 IDEMPOTENCY_CONFLICT。新 bootId 可以从 seq=0 开始；同一执行的 progress 只取更大值，即使设备重启或较低进度迟到也不会回退。进度到 100 仍保持任务与执行 RUNNING，不代替人工复核或任务完成。
+
+lastSeenAt 使用服务端数据库 UTC 接收时间。默认 20 秒内且设备启用时 online=true，到达阈值自动显示离线，不需要后台写入“离线”状态。Redis 只缓存已提交的毫秒时间，Lua 仅接受更大时间且设置 TTL，避免乱序写回退。设备元数据仍取 MySQL；无效、陈旧或未来缓存值不改变数据库事实，Redis 不可达时读取和上报继续使用 MySQL。参数为 REDIS_HOST/PORT/PASSWORD、DEVICE_ONLINE_THRESHOLD_SECONDS、DEVICE_PRESENCE_CACHE_TTL_SECONDS、DEVICE_PRESENCE_KEY_PREFIX，见 .env.example。
+
+设备上传要求 database、storage，使用相同设备头调用 `/api/v1/device/upload-sessions`：POST 创建、GET /{id} 查询、PUT /{id}/parts/{partNo} 上传原始字节。参数和分片规则与用户上传一致，主体由服务端固定为 DEVICE，设备必须属于该执行，只有会话创建设备能读取或写片；用户会话与设备会话分别鉴权。启用 messaging 后才提供设备完成接口 POST /{id}/complete，后续定版复用既有流程；无 messaging 时上传保持 UPLOADING，不生成固定版本。
+
+手动示例见 [examples/t015.http](../examples/t015.http)：先注册一台新设备，再把返回的设备 id 用于 T009 创建并启动一条新任务，保留原 M2 演示任务及其设备。设备令牌只在本地 REST Client 环境中使用，不写入提交文件或日志。
+
+真实验证需 MySQL、Redis、Garage 正常，选择 JDK 21 后执行：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+python3 deploy/scripts/verify-devices.py
+```
+
+探针使用隔离账号，通过正式接口注册设备、创建任务、分配并启动执行，验证管理权限与 CAS、独立认证、设备范围、幂等冲突、并发重试、原结果重放、单调进度及 100 不完成任务。使用真实 Redis 检查时间值、TTL 与重复不续期；另一临时应用连接不可达端口验证回 MySQL，并通过独占缓存命名空间检查实际在线阈值。设备单片上传实际写入私有 Garage，并核对字节与摘要。
+
+探针仅启用 local,database,storage，不启动 RabbitMQ Worker 或 Fabric 客户端，不处理保留的 M2 数据。结束只删除本次账号、任务、设备、事件、上传对象和专属 Redis 键，比较原十七张业务表全部字段及原演示凭据不变，保留追加审计。私有日志、报告位于 `.local/device-probe/<runId>/`（0600），最近成功报告由 `.local/device-probe/latest.json` 指向，实际结果见 [验证记录](../docs/verification.md)。2026-10-23 验证通过：后端 185 项测试；真实设备探针 79 次 HTTP 调用、606 项断言，验证 7 条去重后的设备事件；原十七张业务表、两个保留的 M2 任务及演示凭据保持不变。
+
 ## 当前接口与通用约定
 
 ```bash
@@ -342,12 +376,13 @@ curl -i -H 'X-Trace-Id: t002-demo-001' http://127.0.0.1:8080/api/v1/system/statu
 | `config` | UTC Clock、database Mapper 扫描、local demo 初始化及 prod 防护 |
 | `system` | 已实现只读状态接口 |
 | `identity` | 已实现机构/用户 Mapper、JWT 登录校验、退出、角色 CAS 及任务成员/业务角色权限校验 |
-| `inspection` | 已实现任务列表/详情、草稿与要求、分配、成员维护、子任务、READY 初始执行及启动 |
-| `device` | 设备 Mapper/演示设备，任务分配及启动校验；设备管理和上报接口在后续实现 |
+| `inspection` | 已实现任务列表/详情、草稿与要求、分配、成员维护、初始执行与启动、CAS 换机、执行历史、当前批次汇总、提交验收/完成及固定版本关系分页 |
+| `device` | 已实现设备管理/CAS、独立设备认证、事件去重、单调进度及 Redis presence 回源 |
 | `evidence.storage/upload/finalization/verification` | 已实现私有 S3、幂等分片与定版、实际原文件/副本核验、有界处理及核验历史 |
-| `review`、`sharing` | 人工复核及授权；预留包边界 |
+| `review` | 已实现固定版本异常、人工结论 CAS、分页权限和原子审计 |
+| `sharing` | 已实现精确版本申请、审批/撤销 CAS、期限鉴权、安全元数据分页及短期下载签发 |
 | `blockchain` | 已提供两机构 Gateway、存证消费、MySQL 二进制尝试检查点、原交易恢复及版本/存证状态读取 |
-| `audit` | V2 审计表及成功操作追加 Mapper；查询接口随业务任务接入 |
+| `audit` | 追加成功审计、按多态资源确定任务归属的权限分页与精确过滤 |
 | `messaging` | 已实现 Outbox 租约派发、Confirm + mandatory Return、manual ACK、消费幂等、基础重试扫描及持久死信 |
 
 预留包不含模拟业务实现。MyBatis Starter 4.0.0、Flyway 12.4.0、Connector/J 9.7.0 和 MySQL 8.4.11 已通过 T007；对象存储使用固定 AWS SDK 2.56.0，RabbitMQ 适配使用 Spring Rabbit 4.1.1；缓存客户端随对应任务接入。Spring Boot 父 POM 固定为 4.1.1；Gateway 固定为 1.13.0，gRPC BOM 1.84.0 与 Protobuf BOM 4.36.2 显式管理。默认启动没有 Fabric Bean，也不会读取链身份或连接网络。
@@ -387,4 +422,172 @@ prepare 要求新目录。RPC 异常保留已有检查点并记录 UNKNOWN，启
 
 Peer Gateway 不转发链码错误 payload。探针只在 EndorseException、gRPC ABORTED 和 Peer ErrorDetail 的完整固定业务消息都匹配时，映射为 EVIDENCE_HASH_CONFLICT 或 FORBIDDEN；普通超时、连接错误及泛化 ABORTED 不算预期业务拒绝。
 
-可复用接口为 EvidenceLedgerClient，生产适配为 GatewayEvidenceLedgerClient。探针位于 test 源码，不进入可执行应用 JAR，不提供 HTTP 写入口。T006 已实测通过，具体证据见 [验证记录](../docs/verification.md)。M1、M2 已通过，T014 保留式演示及同版本复查均已实际执行；下一项为 T015。
+可复用接口为 EvidenceLedgerClient，生产适配为 GatewayEvidenceLedgerClient。探针位于 test 源码，不进入可执行应用 JAR，不提供 HTTP 写入口。T006 已实测通过，具体证据见 [验证记录](../docs/verification.md)。M1、M2 已通过，T014 保留式演示及同版本复查均已实际执行；T015 设备管理、独立上报与设备上传已接入；T016 集群模拟、换机及历史批次隔离已通过真实验收；T017 多分片续传与独立版本归档也已验收通过；T018 异常与人工复核已实现，见下文。
+
+
+## 集群模拟、换机与历史资料验收（T016）
+
+`simulator/swarm.py` 使用 Python 标准库，通过正式设备 HTTP 接口并行模拟 3～5 台设备。默认每 5 秒上报，支持心跳、单调进度、PNG 单片上传、原事件重放和指定轮次断网。发送前持久化待确认的 bootId/seq/eventId、上传 clientRequestId 及传片阶段；重启后先重试原请求，再使用本次新 bootId。设备 token 只能放在 `.local/` 下权限 0600 的本地配置中，不进入命令行、状态或日志。配置步骤见 [模拟器说明](../simulator/README.md)。模拟器的 `uploadsSubmitted` 仅表示 complete 接口已接纳，不代表固定版本、复核或存证确认。
+
+真实验收使用独立测试账号和 5 台测试设备，其中 3 台运行上述模拟器。先完成 V9 迁移，并停止其他后端及 RabbitMQ 消费者，再执行：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe clean verify
+python3 deploy/scripts/verify-swarm.py
+```
+
+本轮 199 项后端测试、9 项模拟器离线测试、144 项真实数据库约束和 84 次真实 HTTP/473 项检查通过；最终 JAR 对原 M2 同一成果的 15 次 HTTP/112 项检查也通过。完整证据见 [验证记录](../docs/verification.md)。模拟器测试可用 `python3 -m unittest discover -s simulator -p 'test_swarm.py' -v` 重现。
+
+探针启动随机端口及独占 RabbitMQ 拓扑，启用默认自动 Outbox publisher 和单并发 finalizer，不启用 ledger。启动前检查全库没有待派发、定版或存证恢复工作；本轮关闭两类恢复扫描。业务创建、上报、上传和换机均使用正式 HTTP，不直接调用业务 Bean，也不把数据库改成成功状态。
+
+验收覆盖 3 台设备断网后重放及真实 Redis 在线缓存、3 个子任务的平均进度与必需资料缺失汇总、两个并发 CAS 换机只成功一次、非成员/无业务角色访问拒绝。暂停一个真实 S3 读取，让旧批次在 VERIFYING 时发生换机，再验证定版归属仍为旧批次；后续旧 CLOSED 批次补传得到更大版本号时，当前汇总仍只选择当前 executionId 的最新版本。旧批次新报告只记录历史事件及设备在线时间，批次进度保持冻结；原事件重复不刷新在线时间；进度 100 不会自动完成任务或通过验收。人工复核能力见下文 T018；本段保留 T016 当时的验收范围。
+
+安全报告、模拟器状态和日志位于 `.local/swarm-probe/<runId>/`，`latest.json` 只指向成功验收。探针核对固定对象的实际 PNG 字节、大小和 SHA-256，并保留审计。结束时仅清理本次账号、任务、执行调整、事件、版本、对象和 Redis key；独占 anchor queue 中的事件逐条核对自有 Outbox eventId 后 ACK，PENDING 状态不改成 CONFIRMED，不向 Fabric 新增记录，再删除自己的空拓扑。原 18 张业务表的完整行摘要、演示凭据和 `.env` 必须保持不变。手动接口见 [t016.http](../examples/t016.http)。
+
+
+2026-10-24 真实验收通过：后端 clean verify **199 项测试**，模拟器离线 **9 项测试**，数据库 **144 项真实约束**。集群探针显式 HTTP 57 次、模拟器 HTTP 27 次，合计 **84 次 HTTP**，Java 检查 473 项；确认 6 个固定版本和 6 条自有待存证消息。清理 1 个测试任务、5 个账号、5 台设备、6 个上传会话、12 个对象和 4 个 Redis 键，保留 36 条审计；原十八表完整快照一致。报告为 `.local/swarm-probe/20261024T023750Z-1ce2538c/report.json`。最终 JAR 对原 M2 同版本复查也通过，只追加 3 条核验，无新增版本或链交易；完整证据见 [验证记录](../docs/verification.md)。T017 的多分片乱序、断点续传和并发完成已验收通过，见下文；此处保留当时尚未完成 M3 的范围；当前 M3 已通过，完整 MVP 仍待后续阶段。
+
+## 多分片续传与独立版本归档（T017）
+
+T017 已通过真实验收。现有上传进度返回固定 `partSize`、`partCount`、`expiresAt`，以及按片号排序的 `uploadedParts`、每片大小/摘要和总 `uploadedSize`。客户端从 `1..partCount` 减去已收片号得到缺失片，只补缺片；刷新或应用重启不会重新分配会话规格或延长有效期。同片同内容幂等，不同内容返回 `PART_CONTENT_CONFLICT`；VERIFYING/COMPLETED 冻结写片。
+
+通用用户或设备续传工具为 `simulator/upload.py`，私有配置和状态说明见 [模拟器文档](../simulator/README.md)。先用 `--max-parts 1` 中断一次，再对同配置运行可继续补缺片；状态不保存 JWT 或设备 token。complete 的 202 仅表示异步请求已接纳，需要继续读取服务端进度，不能视为文件定版或链上确认。
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe clean verify
+python3 deploy/scripts/verify-multipart.py
+```
+
+探针在两个独立 JVM 依次启动实际后端。第一阶段按 1024 字节分片规格创建 2500 字节有效 PNG，乱序提交第 3、1 片并退出；第二阶段把应用规格改成 512，先检查旧会话仍按原 1024/3 片及原 expiresAt，再补第 2 片。新 PNG 则用通用客户端的两个独立 Python 进程完成一片中断和继续上传。另以自然到期的短 TTL 会话验证期限配置，以真实多片 PDF、MP4 结构样例验证普通文件归档；MP4 不测试播放、转码或解码。
+
+真实检查包括完整分片与最终对象的实际长度、SHA-256、S3 字节，短片/长片/范围/配置类型和大小拒绝，已登记片冲突，冻结期拒绝写片，并发 complete 只形成一个固定版本，新旧 PNG 不同摘要且旧对象保持。故意修改本次专属 S3 分片得到 FAILED，无正式版本。新版本复核保持 PENDING；探针不启用 ledger，不向 Fabric 新增记录。
+
+运行前须停止其他后端及消息消费者，并确保全库无待派发、校验或待恢复存证。探针使用随机端口、独占 RabbitMQ 拓扑、独立账号/任务/对象，仅清理本次关联资源并保留审计；自有 anchor 事件逐条核对 Outbox 后 ACK，PENDING 不改成 CONFIRMED。报告、日志和安全检查点位于 `.local/multipart-probe/<runId>/`（0600），汇总为 `verify.json`，两个阶段为 `prepare.json` 和 `report.json`；临时账号密码文件和客户端 JWT 配置在成功清理时删除，原 `.env`、演示凭据和十八表全字段/BLOB 快照保持不变。手动请求见 [t017.http](../examples/t017.http)。
+
+
+2026-10-24 真实验收通过：后端 **212 项测试**，续传客户端 **11 项离线测试**；两个独立后端 JVM 共 **79 次 HTTP、648 项检查**，两个独立客户端进程另发起 **9 次 HTTP**，合计 **88 次实际 HTTP**。客户端第一次仅上传 1 片并退出，第二次复用同一会话补 5 片后接纳 complete；后端重启后的原 1024/3 片规格和 expiresAt 保持。4 个正式版本覆盖不同 PNG、有效 PDF 和 MP4 结构样例；损坏分片的会话为 FAILED，无版本。核对并 ACK 4 条本次待存证事件，无 Fabric 写入。
+
+报告为 `.local/multipart-probe/20261024T083321Z-d70b567b/verify.json`，阶段报告和安全检查点保留；清理本次 1 个任务、4 个账号、1 台设备、6 个会话和 28 个私有对象，保留 50 条安全审计，原十八张业务表、二进制检查点及凭据保持。T018 异常与人工复核已实现，见下文；本段 T017 验收范围为上传与独立版本归档。
+
+## 版本异常与人工复核（T018）
+
+T018 已通过真实验收。异常和结论都绑定固定 `evidence_version`，不把“存在异常”自动等同于退回，也不把链上确认等同于人工通过。
+
+| 方法与路径 | 请求/结果 | 权限 |
+| --- | --- | --- |
+| POST /issues | `{versionId,description}`，description 非空白且不超过 4000，返回版本异常 | OrgB OPERATOR_USER 且为任务成员 |
+| GET /evidence-versions/{id}/issues | page/pageSize，按 createdAt ASC、id ASC 返回 items/page/pageSize/total | 当前有该任务版本读取权限的业务成员 |
+| POST /evidence-versions/{id}/review | `{decision,reason?,expectedReviewStatus:"PENDING"}`，decision 为 APPROVED 或 RETURNED | OrgA OWNER_REVIEWER 且为任务成员 |
+| GET /evidence-versions/{id}/review | versionId/reviewStatus/review，未复核时 review=null | 当前有该任务版本读取权限的业务成员 |
+
+RETURNED 必须填写非空白且不超过 1000 字符的 reason；通过时可省略 reason。每个固定版本只有一个正式结论，版本 CAS、唯一 review_record 与成功审计在同一事务内提交；并发或再次决策返回 409 VERSION_CONFLICT。新版本重新 PENDING，旧结论、异常和正式文件保持。复核独立于链状态，APPROVED 但 anchor=PENDING 的资料仍不满足验收条件；异常登记不修改复核或存证状态。
+
+权限每次读取数据库身份、业务角色和任务成员，ORG_ADMIN 不自动获得异常登记或复核权限；设备 token 不能调用这些用户接口。未知和不可访问版本统一 403。正式接口操作见 [t018.http](../examples/t018.http)，显式真实验收如下：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe clean verify
+python3 deploy/scripts/verify-reviews.py
+```
+
+探针使用独立账号、两个任务、实际 PNG 上传和正常自动 Outbox/定版，关闭恢复扫描，不启用 ledger。检查版本异常分页/归属、角色及成员撤销、设备身份拒绝、v1 通过后 v2 重新待复核、两个复核人并发不同决定只有一次成功，以及 v3 单独退回。原文件、新文件、旧结论和异常均实际读取核对，链状态保持 PENDING，不向 Fabric 新增交易。运行前要求全库无待处理工作，且无其他项目后台进程或消息消费者。
+
+报告和日志位于 `.local/review-probe/<runId>/`，权限 0600，`latest.json` 指向最近成功报告。结束仅清理本次 issue/review_record、任务、账号、版本、对象及独占消息拓扑，逐条核对自有 anchor 事件后 ACK，保留追加审计；原二十张业务表的完整行/BLOB 快照、`.env` 和演示凭据保持。本段 T018 当时尚未接入正式提交验收/完成接口，相关状态流仅由 21 项复核服务单测覆盖；当时的 167 项真实 SQL 回滚检查验证表结构与约束。T019 现已补齐真实 HTTP 的退回重开、历史版本不重开和完成后拒写，见下文，保留 T018 当时的验收范围。
+
+
+2026-10-24 验收通过：后端 clean verify **233 项测试**，其中新增 21 项复核服务测试；真实数据库 **167 项约束**。显式探针 **108 次 HTTP、780 项检查**通过，实际定版 4 个不同内容的 PNG，登记 4 条异常、3 条正式复核结论。并发不同决定恰好一个成功、一个 409；通过但未上链的版本 acceptanceReady=false，新版重新 PENDING，旧异常、结论和文件保持。
+
+报告为 `.local/review-probe/20261024T123905Z-f324778b/report.json`。清理本次 2 个任务、8 个账号、1 台设备、4 个上传会话与 8 个私有对象；4 条自有存证事件核对后 ACK，存证保持 PENDING，无 Fabric 写入；保留 49 条安全审计。原二十表完整行/BLOB、凭据及独占拓扑清理检查通过。T019 正式提交验收与任务完成现已验收通过，见下文；本段保留 T018 当时的状态流验证边界。
+
+## 正式提交验收与任务完成（T019）
+
+T019 已通过真实验收。完成时间 `completed_at` 与状态配对约束原本就在 V1，本轮沿用 V1～V10 和二十张业务表，DTO 新增显式 `completedAt`，没有新增迁移或回改历史脚本。
+
+| 方法与路径 | 操作者 | 条件与结果 |
+| --- | --- | --- |
+| POST /tasks/{id}/submit-acceptance | OrgB OPERATOR_TASK_ADMIN 且为成员 | `{expectedLockVersion}`；RUNNING 且当前每项 required 有固定版本，进入 WAITING_ACCEPTANCE，允许复核或存证仍待处理 |
+| POST /tasks/{id}/complete | OrgA OWNER_TASK_ADMIN 且为成员 | `{expectedLockVersion}`；WAITING_ACCEPTANCE，当前每项 required 的最新固定版均 APPROVED+CONFIRMED，当前所有资料均无 VERIFYING，进入 COMPLETED 并设置数据库 UTC completedAt |
+
+判断使用子任务 `currentExecutionId` 和该批次资料的最新固定版本，旧批次较大版本号、旧版批准和旧版确认不能代替当前成果。当前 optional 的 VERIFYING 也阻止完成；当前 UPLOADING 草稿和历史批次 VERIFYING 不阻止完成。接口只在短数据库事务内校验资格、CAS 变更及写成功审计，不执行 S3 或 Fabric I/O。并发提交或完成只有一次成功，重复状态请求返回 409。
+
+WAITING_ACCEPTANCE 期间，当前最新版本退回、当前批次产生新固定版或人工换机会回到 RUNNING；旧版退回和历史补传不重开。COMPLETED 后禁止新增任务成果、资料和子任务变更、换机、复核和异常登记；原处理中 Worker 在最终写入前重新检查终态，不能再产生版本。已完成上传会话的 complete 仍可幂等返回原进度，不重新定版。管理员仍可维护成员以撤销历史读取权限，原 completedAt 保持。
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe clean verify
+python3 deploy/scripts/verify-acceptance.py
+```
+
+真实探针启用 `local,database,storage,messaging,ledger`，使用原普通 User1 身份、原通道与链码，默认自动派发、单消费者定版/存证和恢复扫描；随机本机端口及独占消息拓扑。启动前检查没有其他后台进程/消费者，且全库没有待处理工作。任务、成员、上传、复核、提交、换机和完成全部经过正式 HTTP，不直接调用业务 Bean，不用 SQL 伪造批准、确认或任务状态。
+
+单个测试任务含一个 required 和一个 optional，实际登记七个固定版本。真实背书前短暂停留可验证本地 PENDING 不等于确认，再释放并完成真实 Fabric 提交；分别隔离“已通过但未确认”和“已确认但未复核”两个条件，确认任一缺失都不能完成；真实 S3 流暂停可验证当前 optional VERIFYING 阻止完成、历史 VERIFYING 不阻止完成和终态拒绝迟到定版。完成后使用原 commitBytes 向 Fabric 再查询，双方机构查询同一首笔交易及摘要，并核对正式对象实际字节。
+
+安全报告、日志位于 `.local/acceptance-probe/<runId>/`（0600），`latest.json` 指向成功记录；报告保留 evidenceId/versionNo、首笔交易号、验证码、区块号及检查点摘要，不输出凭据、对象键或原始检查点。结束只清理本次链外测试数据、对象和自有空消息拓扑，保留追加审计；Fabric 记录追加保留，原二十表所有原列（含 completed_at）与 BLOB、原 `.env` 和演示凭据保持。手动请求见 [t019.http](../examples/t019.http)。共享、审计查询和完整 MVP 验收仍待后续任务。
+
+
+2026-10-24 验收通过：最终后端 clean verify **262 项测试**，真实数据库 **172 项约束**；沿用原十版迁移，没有新增迁移。正式验收探针 **132 次 HTTP、968 项检查**通过，实际完成单个任务，`completedAt=2026-10-24T13:56:32.355Z`。分别验证未复核、未确认及当前 optional VERIFYING 独立阻止完成，并发提交/完成各只有一次成功，旧批次较大版本与迟到 Worker 均不能绕过当前成果或终态条件。
+
+本次 **7 个固定版本均获真实 CONFIRMED**，原交易再查询 VALID、validationCode=0，区块号 14～20；OrgA/B 查询一致，链记录永久保留。报告为 `.local/acceptance-probe/20261024T135552Z-32ad456a/report.json`，包含每条 evidenceId、版本、首笔交易号及检查点摘要。保留 69 条安全审计，清理本次 1 个任务、6 个账号、2 台设备、9 个上传会话与 17 个私有对象；原二十表所有列和 BLOB、原凭据及自有拓扑清理检查通过。T020 共享申请、批准、撤销与受控下载已通过真实验收，见下文；此处保留当时尚未完成 M3 的范围；当前 M3 已通过，完整 MVP 仍待后续阶段。
+
+## 精确版本共享与受控下载（T020）
+
+T020 已通过真实验收。V11 新增 `access_grant`，申请与审批/撤销保存在同一行，唯一 `(applicant_id,client_request_id)`；授权只对应一个固定版本，不扩展到其他版本、整个任务或同机构其他用户。
+
+| 方法与路径 | 行为与权限 |
+| --- | --- |
+| POST /access-grants | 有效注册用户申请 `{clientRequestId,versionId,reason,requestedValidUntil}`，只返回安全申请元数据；同键同内容重用原状态，不同内容 409 |
+| GET /access-grants?mine=true | 当前申请者自己的请求分页；与 taskId 互斥 |
+| GET /access-grants?taskId=... | 仅任务成员中的 OrgA OWNER_DATA_APPROVER 可读审批队列 |
+| POST /access-grants/{id}/decision | 同上角色批准/拒绝，携带 expectedLockVersion；批准期限不超过申请期限，拒绝须填写原因 |
+| POST /access-grants/{id}/revoke | 同上角色撤销仍有效的 APPROVED 授权，携带原因及 CAS 版本 |
+| GET /evidence-versions | 先按任务或精确授权路径过滤，再 COUNT/LIMIT 分页，可选 taskId/requirementId |
+| POST /evidence-versions/{id}/download-url | 按当前身份/权限签发 `{url,expiresAt}`，响应 no-store；只记录 URL_ISSUED，不把签发当作实际下载 |
+
+申请无需先完成任务，也无需版本已经复核或存证；批准时必须满足该固定版本 APPROVED+CONFIRMED。未批准的申请只让申请者查看请求元数据，不开放详情、存证状态、下载或核验；未知版本申请统一 403。申请/授权列表按 createdAt DESC、id DESC 排序。实际权限使用数据库时间判定，APPROVED 超过 validUntil 即派生 EXPIRED，不依赖后台改状态。
+
+共享读取路径允许同机构非成员及 ORG_ADMIN-only 注册账号，但只授予被批准版本的详情、列表、存证状态、下载和实际核验/历史。没有整任务权限；新版本需要独立申请，旧版撤销不会撤销新版的独立授权。STORED/COPY 核验仍读取实际字节并查询真实链，保存结果前重新验证当前身份及精确授权；I/O 期间撤销或禁用会阻止结果保存。
+
+下载地址签名有效期为 300 秒与授权剩余秒数的较小值，不足 1 秒拒绝签发。签名使用数据库时间并回传实际 SigV4 到期时间；服务端在本地签发与安全审计同事务完成，不读取对象。撤销后不再签发新地址；已经签发的地址仍可能使用至原 expiresAt。私有桶拒绝无签名访问，地址不能写进应用日志、审计、共享元数据或提交记录。
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe clean verify
+python3 deploy/scripts/verify-sharing.py
+```
+
+真实探针使用原 Fabric User1 身份与原网络，默认自动派发/定版/存证，独占随机消息拓扑；创建单个始终 RUNNING 的任务和两个不同 PNG 版本，正式复核并真实确认。覆盖请求幂等、批准资格、决策/撤销并发 CAS、精确版本与 SQL 分页权限、两机构非成员和 ORG_ADMIN-only 共享、STORED/COPY 实际 MATCH/MISMATCH、自然到期、撤销与禁用期间的核验最终重鉴权，以及真实签名 GET/无签名拒绝及撤销后的旧地址边界。禁用仅是对本次隔离账号的安全负例 SQL，不用于伪造任何业务成功状态。
+
+日志与报告位于 `.local/sharing-probe/<runId>/`（0600），不含 JWT、原始签名 URL、对象键或检查点字节。结束清理本次 access_grant、核验及关联链外夹具/对象/独占空拓扑，保留审计和真实链记录，原二十一表所有列/BLOB、原 `.env` 和演示凭据保持。手动调用见 [t020.http](../examples/t020.http)。
+
+
+2026-10-25 验收通过：最终后端 clean verify **311 项测试**，真实数据库 **206 项约束**，V11 checksum=`1029133993`。共享探针 **123 次显式 HTTP、866 项检查**通过，创建 5 条申请/授权；两个实际版本均真实 CONFIRMED，验证码 0、区块号 21/22，双方机构查询及原交易检查点再查询一致。
+
+任务路径与共享路径下载 TTL 均实测 300 秒，短授权实测 7 秒；自然到期时原 SQL 状态仍为 APPROVED，实际权限和对外状态已 EXPIRED。共享 STORED/COPY 读真实字节及账本得到 MATCH/MISMATCH；撤销和隔离账号禁用发生在 S3 I/O 中时均未保存结果。报告 `.local/sharing-probe/20261025T011035Z-c4276bac/report.json` 不含签名地址，保留 46 条安全审计与两条真实链记录；清理本次 1 个任务、9 个账号、1 台设备、2 个上传会话与 4 个私有对象，原二十一表、BLOB、凭据及自有拓扑检查通过。T021 审计查询与关系整合已完成，见下文；此处保留当时尚未完成 M3 的范围；当前 M3 已通过，完整 MVP 仍待后续阶段。
+
+## 任务审计与证据关系查询（T021）
+
+T021 已通过真实验收，M3 业务补齐通过。沿用 V1～V11、二十一张业务表，不增加迁移。两条接口仅允许当前任务成员中的 OrgA OWNER_TASK_ADMIN、OWNER_REVIEWER、OWNER_DATA_APPROVER，或 OrgB OPERATOR_TASK_ADMIN；OPERATOR_USER、ORG_ADMIN-only 及只获精确版本共享的用户不能读取整任务历史。
+
+| 方法与路径 | 参数与返回 |
+| --- | --- |
+| GET /tasks/{id}/audit-logs | page/pageSize，最大 100；可选 action/resourceType/traceId 精确过滤，返回 items/page/pageSize/total |
+| GET /tasks/{id}/evidence-relations | page/pageSize，最大 100；可选 requirementId/executionId，返回 taskId/items/page/pageSize/total/asOf |
+
+审计按 createdAt DESC、id DESC 稳定分页，先以多态 `resource_type` 和真实外键确定任务归属，再做筛选、COUNT 和 LIMIT。同 traceId、操作者、机构或设备不会让其他任务的事件混入。登录、角色修改及设备注册/启停是全局事件，不归入任务；设备报告通过其实际执行批次归属。返回原事件安全字段及已解析的任务/版本/子任务/执行编号，URL_ISSUED 明确标注“下载地址签发”，不把签发地址当成实际下载成功。
+
+关系查询先对固定版本分页，再仅按当前页不超过 100 个编号批量汇总异常、正式复核、首笔确认交易、共享各状态数量和核验次数，避免一对多表联接造成计数倍增。currentExecution 按子任务当前执行指针判断；latestInExecution 始终在同资料与同执行内比较，不受当前分页影响。active/expired 共享计数使用响应同一数据库 asOf；存证区块号和验证码只来自与 confirmedTxId 对应的持久尝试，不执行链查询。
+
+查询在短数据库事务中重验当前账号、角色和成员；完成任务仍可读取，失去权限立即拒绝。接口不写审计，也不访问对象存储或 Fabric，不返回对象键、原始检查点、下载地址、异常描述或复核/审批原因。
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe clean verify
+python3 deploy/scripts/verify-audit.py
+```
+
+真实探针使用两个任务共享同一操作者、设备及 traceId，主任务通过正式上传/复核/真实 Fabric 确认产生两个固定版本，再创建异常、五种共享状态、地址签发及实际核验，并通过正式提交/完成接口进入终态。副任务仅建立执行、设备报告和上传草稿。独立 Java oracle 逐条按原 audit resource type 解析外键，size=1 遍历两任务的全部页，核对精确行、顺序、过滤、空页和派生范围；关系嵌套字段及计数逐项与真实 SQL 对照。查询前后审计总数、真实透传 S3/Gateway 调用计数保持，证明读操作不会追加审计或执行外部 I/O。
+
+本轮两版均属同一当前批次，主要验证旧版与最新标记；历史执行 currentExecution=false 分支沿用既有单测及 T016/T019 批次隔离证据。账号禁用只修改本次安全负例账号，角色和成员撤销使用正式接口；探针不伪造批准、确认或完成状态。日志与报告在 `.local/audit-probe/<runId>/`（0600），清理自己的二十一表关联夹具、对象、单个设备 presence key 和独占消息拓扑，保留审计及真实链记录；原 `.env`、演示凭据、原表全字段/BLOB 保持。接口示例见 [t021.http](../examples/t021.http)。
+
+
+2026-10-25 最终验收通过：后端 clean verify **339 项测试**，真实数据库 **206 项约束**，沿用原 V1～V11，没有新增或修改历史迁移。最终探针 `.local/audit-probe/20261025T070803Z-13612c9f/report.json` 完成 **161 次 HTTP、1836 项检查**；主任务 42 条、副任务 9 条审计均逐页与独立 typed FK oracle 完全一致，同 trace 的 12 条全局身份/设备事件被排除。关系嵌套字段、两版最新标记、异常/核验/共享各状态计数与 SQL 一致，读取前后审计总量及 S3/Gateway 透传调用数不变。
+
+最终运行保留 63 条审计和两个真实 CONFIRMED 链记录，区块 25/26；清理本次 2 个任务、7 个账号、1 台设备、4 个上传会话、6 个私有对象和 1 个 presence key，原二十一表（含原 27 条核验）、BLOB 和凭据保持。首轮报告 `.local/audit-probe/20261025T070335Z-c199b8d7/report.json` 曾在 98 次 HTTP、693 项检查后因探针 JDBC UTC 类型处理过窄失败；只修正测试 oracle 的 LocalDateTime→UTC 与元数据查询，生产代码未变，首轮原数据/夹具清理也通过。首轮已经提交的区块 23/24 同样追加保留，因此本轮合计保留四条真实链记录，不重建或回退账本。
+
+M3 的 T015～T021 已全部完成；下一步 T022 进入 M4，继续完善 Outbox、消费幂等和死信。完整故障矩阵、性能测试、部署复现及完整 MVP 仍按后续任务执行。

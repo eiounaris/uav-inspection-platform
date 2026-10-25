@@ -31,7 +31,7 @@ public class VerificationTransactions {
     public Prepared prepare(CurrentUser supplied,String versionId) {
         CurrentUser actor=permissions.currentActor(supplied,false);
         VersionRow version=required(mapper.version(versionId));
-        permissions.requireTask(actor,version.taskId(),version.ownerOrgId(),version.operatorOrgId(),null);
+        permissions.requireVersion(actor,version.id(),version.taskId(),version.ownerOrgId(),version.operatorOrgId(),false);
         return new Prepared(actor,version);
     }
 
@@ -63,7 +63,7 @@ public class VerificationTransactions {
         CurrentUser actor=permissions.currentActor(supplied,true);
         VersionRow current=required(mapper.version(versionId));
         if(!located.taskId().equals(current.taskId())) throw new BusinessException(ErrorCode.VERSION_CONFLICT);
-        permissions.requireTask(actor,current.taskId(),current.ownerOrgId(),current.operatorOrgId(),null);
+        permissions.requireVersion(actor,current.id(),current.taskId(),current.ownerOrgId(),current.operatorOrgId(),true);
         return new Prepared(actor,current);
     }
 

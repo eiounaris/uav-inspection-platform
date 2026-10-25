@@ -1,4 +1,9 @@
 spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
   datasource:
     url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:uav_inspection}?sslMode=${DB_SSL_MODE:REQUIRED}&connectionTimeZone=%2B00:00&forceConnectionTimeZoneToSession=true&preserveInstants=true&characterEncoding=UTF-8
     username: ${DB_USERNAME:uav_app}
@@ -26,6 +31,10 @@ mybatis:
     local-cache-scope: STATEMENT
     log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
 inspection:
+  device:
+    online-threshold-seconds: ${DEVICE_ONLINE_THRESHOLD_SECONDS:20}
+    presence-cache-ttl-seconds: ${DEVICE_PRESENCE_CACHE_TTL_SECONDS:60}
+    presence-key-prefix: ${DEVICE_PRESENCE_KEY_PREFIX:inspection:device:seen:}
   auth:
     jwt-secret: ${JWT_SECRET}
 

@@ -1,0 +1,71 @@
+# T017：首选通用续传客户端，配置步骤见 simulator/README.md「通用文件多分片续传」。
+# 在权限0600的.local/uploader/config.json填写本地文件、requirementId、executionId和用户JWT：
+# python3 simulator/upload.py --config .local/uploader/config.json --max-parts 1
+# 停止并重启后端后，沿用同一config和state再执行：
+# python3 simulator/upload.py --config .local/uploader/config.json
+# 工具按服务端实际partSize补缺片；默认8MiB时须选大于8MiB的真实文件才能展示多片。
+# CLI流程与下方低层手动流程择一；不要把两次独立创建返回的uploadId混用。
+#
+# 下方低层手动示例仅适用于专门以1024字节分片启动的后端，不能直接用于默认8MiB！
+# 1. 停止原后端。在项目根目录选择JDK21，保留原.env和服务卷，启动：
+#    UPLOAD_PART_SIZE=1024 UPLOAD_MAX_FILE_SIZE=8192 python3 deploy/scripts/run-backend.py
+# 2. 在终端执行下面单行Python，生成真正有效的2500字节PNG和1024/1024/452三片：
+#    python3 -c 'from pathlib import Path; import struct,zlib; p=Path(".local/uploader"); p.mkdir(parents=True,exist_ok=True,mode=0o700); p.chmod(0o700); b=Path("examples/files/inspection-sample.png").read_bytes(); t=b"probe\0"+b"p"*(2500-len(b)-18); k=b"tEXt"+t; f=b[:-12]+struct.pack(">I",len(t))+k+struct.pack(">I",zlib.crc32(k))+b[-12:]; q=p/"inspection.png"; q.write_bytes(f); q.chmod(0o600); [(x.write_bytes(f[i:i+1024]),x.chmod(0o600)) for i in range(0,len(f),1024) for x in [p/("part-"+str(i//1024+1)+".bin")]]; assert len(f)==2500'
+# 3. 沿用t009的真实RUNNING任务，填写下列用户JWT、资料和执行编号。
+#    POST成功后先确认响应partSize=1024、partCount=3，再填写uploadId并发送下面分片。
+#    若响应规格不同，按实际响应重新切片和调整size；不要继续发送固定的第3片。
+# 4. 依次传3、1，GET应显示uploadedSize=1476、uploadedParts=[1,3]，缺第2片。
+#    重启应用后GET仍保留原规格/期限；补2再complete。新逻辑上传使用新clientRequestId。
+@baseUrl = http://127.0.0.1:8080/api/v1
+@userToken = REPLACE_LOCAL_OPERATOR_USER_JWT
+@requirementId = REPLACE_REQUIREMENT_UUID
+@executionId = REPLACE_RUNNING_EXECUTION_UUID
+@clientRequestId = REPLACE_STABLE_REQUEST_UUID
+@uploadId = REPLACE_UPLOAD_UUID
+
+### 建立逻辑上传；重试必须沿用clientRequestId及同一文件元数据
+POST {{baseUrl}}/upload-sessions
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{"clientRequestId":"{{clientRequestId}}","requirementId":"{{requirementId}}","executionId":"{{executionId}}","filename":"inspection.png","contentType":"image/png","size":2500}
+
+### GET为续传依据：partSize/partCount/expiresAt固定，uploadedParts按partNo排序
+# missingParts由1..partCount减去uploadedParts.partNo推导；uploadedSize是已登记字节数。
+GET {{baseUrl}}/upload-sessions/{{uploadId}}
+Authorization: Bearer {{userToken}}
+
+### 乱序先传第三片（必须已确认本会话1024/3片）
+PUT {{baseUrl}}/upload-sessions/{{uploadId}}/parts/3
+Authorization: Bearer {{userToken}}
+Content-Type: application/octet-stream
+
+< ../.local/uploader/part-3.bin
+
+### 同片相同内容幂等；同片不同内容409 PART_CONTENT_CONFLICT
+PUT {{baseUrl}}/upload-sessions/{{uploadId}}/parts/1
+Authorization: Bearer {{userToken}}
+Content-Type: application/octet-stream
+
+< ../.local/uploader/part-1.bin
+
+### 刷新/重启后补缺失的第2片；不要重新创建会话
+PUT {{baseUrl}}/upload-sessions/{{uploadId}}/parts/2
+Authorization: Bearer {{userToken}}
+Content-Type: application/octet-stream
+
+< ../.local/uploader/part-2.bin
+
+### 缺片返回409 UPLOAD_PARTS_INCOMPLETE；齐片后202只表示定版请求接纳
+# 可并发发送两次，只有一个固定版本；VERIFYING/COMPLETED拒绝继续写片。
+POST {{baseUrl}}/upload-sessions/{{uploadId}}/complete
+Authorization: Bearer {{userToken}}
+
+### 轮询processingStatus=COMPLETED，versionId才表示固定版本
+GET {{baseUrl}}/upload-sessions/{{uploadId}}
+Authorization: Bearer {{userToken}}
+
+### 新版本使用新的clientRequestId及新文件，保留相同requirementId/executionId
+# 后端按新会话几何分片；旧会话、旧固定对象及摘要保持，复核重新PENDING。
+# 通用命令说明和私有配置样例见simulator/README.md，真实多分片验收：
+# python3 deploy/scripts/verify-multipart.py

@@ -13,6 +13,9 @@ spring:
         write-dates-as-timestamps: false
     deserialization:
       fail-on-unknown-properties: true
+      accept-float-as-int: false
+    mapper:
+      allow-coercion-of-scalars: false
   web:
     error:
       include-message: never

@@ -6,12 +6,15 @@ import com.uav.inspection.common.error.ErrorCode;
 import com.uav.inspection.identity.CurrentUser;
 import com.uav.inspection.identity.IdentityService;
 import com.uav.inspection.identity.security.JwtTokenService;
+import com.uav.inspection.device.DeviceAuthenticationFilter;
+import com.uav.inspection.device.DeviceAuthenticationService;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.annotation.Order;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationServiceException;
@@ -28,6 +31,7 @@ import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.authentication.AuthenticationEntryPointFailureHandler;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
@@ -38,6 +42,21 @@ import java.nio.charset.StandardCharsets;
 public class SecurityConfiguration {
 
     @Bean
+    @Order(1)
+    @Profile("database")
+    SecurityFilterChain deviceApi(HttpSecurity http, DeviceAuthenticationService devices, JsonMapper json) throws Exception {
+        stateless(http);
+        http.securityMatcher("/api/v1/device", "/api/v1/device/**")
+                .authorizeHttpRequests(authorize -> authorize.anyRequest().hasRole("DEVICE"))
+                .exceptionHandling(errors -> errors
+                        .authenticationEntryPoint((request,response,failure) -> writeDeviceError(response,json,ErrorCode.UNAUTHORIZED))
+                        .accessDeniedHandler((request,response,failure) -> writeDeviceError(response,json,ErrorCode.FORBIDDEN)))
+                .addFilterBefore(new DeviceAuthenticationFilter(devices,json), UsernamePasswordAuthenticationFilter.class);
+        return http.build();
+    }
+
+    @Bean
+    @Order(2)
     @Profile("database")
     SecurityFilterChain authenticatedApi(HttpSecurity http, JwtTokenService tokens,
                                           IdentityService identities, JsonMapper json) throws Exception {
@@ -114,5 +133,13 @@ public class SecurityConfiguration {
             response.setHeader("WWW-Authenticate", "Bearer");
         }
         json.writeValue(response.getOutputStream(), ApiResponse.error(error.name(), error.message(), null));
+    }
+
+    private static void writeDeviceError(HttpServletResponse response, JsonMapper json, ErrorCode error) throws IOException {
+        response.setStatus(error.status().value());
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setContentType("application/json");
+        if(error==ErrorCode.UNAUTHORIZED) response.setHeader("WWW-Authenticate","Device");
+        json.writeValue(response.getOutputStream(),ApiResponse.error(error.name(),error.message(),null));
     }
 }

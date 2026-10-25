@@ -26,6 +26,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -39,7 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** Covers the real bearer filter failure handler as well as MVC database error rendering. */
-@WebMvcTest(controllers = IdentityController.class, properties = {
+@WebMvcTest(controllers = {IdentityController.class, com.uav.inspection.device.DeviceReportController.class}, properties = {
         "inspection.auth.jwt-secret=f16a98c3b72d0e4593a6c48d0527f9be8ac65143e27db06f954c8ae170b32d69"
 })
 @ActiveProfiles("database")
@@ -62,6 +64,68 @@ class SecurityFailureContractTest {
 
     @MockitoBean
     IdentityService identities;
+
+    @MockitoBean
+    com.uav.inspection.device.DeviceAuthenticationService devices;
+
+    @MockitoBean
+    com.uav.inspection.device.DeviceService deviceReports;
+
+    @Test
+    void revokedDeviceAfterAuthenticationStillReceivesADeviceChallenge() throws Exception {
+        String id="20000000-0000-4000-8000-000000000001",token="e".repeat(64);
+        var principal=new com.uav.inspection.device.CurrentDevice(id,USER.orgId(),"test-drone","d".repeat(64));
+        when(devices.authenticate(id,token)).thenReturn(principal);
+        when(deviceReports.report(eq(principal),any())).thenThrow(new BusinessException(ErrorCode.UNAUTHORIZED));
+        MvcResult result=mvc.perform(post("/api/v1/device/reports")
+                        .header(TRACE,"device-revoked-after-auth").header("X-Device-Id",id).header("X-Device-Token",token)
+                        .contentType(MediaType.APPLICATION_JSON).content("""
+                                {"bootId":"30000000-0000-4000-8000-000000000001","seq":0,
+                                "eventId":"40000000-0000-4000-8000-000000000001",
+                                "executionId":"50000000-0000-4000-8000-000000000001","type":"HEARTBEAT"}
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE,"Device")).andReturn();
+        assertSafeError(result,"UNAUTHORIZED","device-revoked-after-auth");
+        verifyNoInteractions(identities);
+    }
+
+    @Test
+    void userJwtCannotAuthenticateADeviceRouteEvenWithUnreadableJson() throws Exception {
+        MvcResult result=mvc.perform(post("/api/v1/device/reports")
+                        .header(TRACE,"jwt-on-device-route")
+                        .header(HttpHeaders.AUTHORIZATION,"Bearer "+tokens.issue(USER).accessToken())
+                        .contentType(MediaType.APPLICATION_JSON).content("invalid-json"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE,"Device")).andReturn();
+        assertSafeError(result,"UNAUTHORIZED","jwt-on-device-route");
+        verifyNoInteractions(identities,devices);
+    }
+
+    @Test
+    void deviceHeadersCannotAuthenticateAUserRoute() throws Exception {
+        MvcResult result=mvc.perform(get("/api/v1/users/me")
+                        .header(TRACE,"device-on-user-route")
+                        .header("X-Device-Id","20000000-0000-4000-8000-000000000001")
+                        .header("X-Device-Token","e".repeat(64)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE,"Bearer")).andReturn();
+        assertSafeError(result,"UNAUTHORIZED","device-on-user-route");
+        verifyNoInteractions(identities,devices);
+    }
+
+    @Test
+    void deviceAuthenticationDatabaseFailureUsesTheSameSafe503Envelope() throws Exception {
+        String id="20000000-0000-4000-8000-000000000001",token="e".repeat(64);
+        when(devices.authenticate(id,token)).thenThrow(unavailable());
+        MvcResult result=mvc.perform(post("/api/v1/device/reports")
+                        .header(TRACE,"device-database-down").header("X-Device-Id",id).header("X-Device-Token",token)
+                        .contentType(MediaType.APPLICATION_JSON).content("invalid-json"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().doesNotExist(HttpHeaders.WWW_AUTHENTICATE)).andReturn();
+        assertSafeError(result,"DEPENDENCY_UNAVAILABLE","device-database-down");
+        verifyNoInteractions(identities);
+    }
 
     @Test
     void rendersBearerDatabaseFailureAs503ThroughTheRealFilterFailureHandler() throws Exception {

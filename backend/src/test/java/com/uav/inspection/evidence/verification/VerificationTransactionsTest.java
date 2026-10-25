@@ -53,7 +53,7 @@ class VerificationTransactionsTest {
         order.verify(mapper).lockTask("task");
         order.verify(permissions).currentActor(ACTOR,true);
         order.verify(mapper).version(VERSION);
-        order.verify(permissions).requireTask(ACTOR,"task",ROW.ownerOrgId(),ROW.operatorOrgId(),null);
+        order.verify(permissions).requireVersion(ACTOR,VERSION,"task",ROW.ownerOrgId(),ROW.operatorOrgId(),true);
         order.verify(mapper).insert(any());
         order.verify(audit).insertResourceSuccess(anyString(),eq(ACTOR.id()),eq(ACTOR.orgId()),eq("FILE_VERIFICATION_COMPLETED"),
                 eq("EVIDENCE_VERSION"),eq(VERSION),anyString());
@@ -62,7 +62,7 @@ class VerificationTransactionsTest {
 
     @Test
     void membershipRevokedDuringIoPreventsTheRecordAndItsAuditFromBeingWritten() {
-        doThrow(new BusinessException(ErrorCode.FORBIDDEN)).when(permissions).requireTask(ACTOR,"task",ROW.ownerOrgId(),ROW.operatorOrgId(),null);
+        doThrow(new BusinessException(ErrorCode.FORBIDDEN)).when(permissions).requireVersion(ACTOR,VERSION,"task",ROW.ownerOrgId(),ROW.operatorOrgId(),true);
         BusinessException failure=assertThrows(BusinessException.class,()->transactions().save(ACTOR,VERSION,"COPY",result));
         assertEquals(ErrorCode.FORBIDDEN,failure.errorCode());
         verify(mapper,never()).insert(any());
@@ -88,7 +88,7 @@ class VerificationTransactionsTest {
         var page=transactions().history(ACTOR,VERSION,2,3);
         assertEquals(9,page.total());
         var order=inOrder(permissions,mapper);
-        order.verify(permissions).requireTask(ACTOR,"task",ROW.ownerOrgId(),ROW.operatorOrgId(),null);
+        order.verify(permissions).requireVersion(ACTOR,VERSION,"task",ROW.ownerOrgId(),ROW.operatorOrgId(),true);
         order.verify(mapper).count(VERSION);
         order.verify(mapper).page(VERSION,3,3);
     }

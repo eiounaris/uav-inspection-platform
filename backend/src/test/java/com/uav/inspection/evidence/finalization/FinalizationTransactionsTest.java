@@ -81,6 +81,62 @@ class FinalizationTransactionsTest {
     }
 
     @Test
+    void aSessionWithAnExistingVersionNeverAllocatesAnotherNumberOrSubmission() {
+        when(uploads.findVersionId(UPLOAD)).thenReturn("existing-version");
+        when(work.complete(UPLOAD,TOKEN)).thenReturn(1);
+
+        assertTrue(transactions.finish(claim,"unused-candidate",12,"b".repeat(64)));
+
+        verify(work).complete(UPLOAD,TOKEN);
+        verify(work).done(EVENT.eventId());
+        verify(work,never()).lockVersionNumber(anyString());
+        verify(work,never()).insertVersion(any());
+        verify(work,never()).advanceVersion(anyString(),anyInt());
+        verify(work,never()).insertSubmission(anyString(),anyString());
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void aConcurrentDeliveryCannotTakeOverAnAlreadyClaimedSession() {
+        when(work.claim(eq(UPLOAD),anyString())).thenReturn(1,0);
+        when(uploads.listParts(UPLOAD)).thenReturn(List.of());
+
+        assertNotNull(transactions.claim(EVENT,false));
+        assertNull(transactions.claim(EVENT,false));
+
+        verify(work).processing(EVENT.eventId());
+        verify(uploads).listParts(UPLOAD);
+        verify(work,never()).insertVersion(any());
+        verify(work,never()).done(anyString());
+    }
+
+    @Test
+    void lateDeviceVersionRetainsItsClosedExecutionAndDoesNotReopenReplacementTask() {
+        var historical = new SessionRow(UPLOAD,"task","subtask","requirement","evidence","execution","org",
+                "DEVICE","old-drone","client","hash","image.png","image/png",12,1048576,1,"VERIFYING",NOW.plusSeconds(3600),0,NOW,NOW);
+        when(uploads.findSession(UPLOAD)).thenReturn(historical);
+        when(uploads.lockSession(UPLOAD)).thenReturn(historical);
+        when(uploads.lockExecution("execution")).thenReturn(new ExecutionRow("execution","subtask","CLOSED"));
+        when(uploads.lockSubtask("subtask")).thenReturn(new SubtaskRow("subtask","task","replacement-execution"));
+        when(work.lockVersionNumber("requirement")).thenReturn(8);
+        when(work.insertVersion(any())).thenReturn(1);
+        when(work.advanceVersion("requirement",8)).thenReturn(1);
+        when(work.insertSubmission(anyString(),anyString())).thenReturn(1);
+        when(work.complete(UPLOAD,TOKEN)).thenReturn(1);
+
+        assertTrue(transactions.finish(new Claim(EVENT,historical,List.of(),TOKEN),"evidence-files/"+UPLOAD+"/"+TOKEN,12,"c".repeat(64)));
+
+        var version = ArgumentCaptor.forClass(FixedVersion.class);
+        verify(work).insertVersion(version.capture());
+        assertEquals("execution",version.getValue().executionId());
+        assertEquals("old-drone",version.getValue().uploaderDroneId());
+        assertNull(version.getValue().uploaderUserId());
+        assertEquals(8,version.getValue().versionNo());
+        verify(work,never()).reopenTask(anyString());
+        verify(outbox).enqueue(eq("EVIDENCE_ANCHOR_REQUESTED"),anyString(),eq(EVENT.traceId()));
+    }
+
+    @Test
     void doneMessageIsIgnoredButScannerCanReclaimTheStillVerifyingBusinessWork() {
         when(work.consumption(EVENT.eventId())).thenReturn("DONE");
         when(work.claim(eq(UPLOAD),anyString())).thenReturn(1);

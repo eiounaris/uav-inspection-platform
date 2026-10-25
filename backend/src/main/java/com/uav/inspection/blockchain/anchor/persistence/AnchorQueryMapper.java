@@ -1,12 +1,47 @@
 package com.uav.inspection.blockchain.anchor.persistence;
 
 import com.uav.inspection.blockchain.anchor.AnchorViews.AnchorView;
+import com.uav.inspection.blockchain.anchor.AnchorViews.VersionListItem;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
 import java.time.Instant;
+import java.util.List;
 
 public interface AnchorQueryMapper {
+    String VISIBLE = """
+            FROM evidence_version v JOIN upload_session u ON u.id=v.upload_session_id
+              JOIN inspection_task t ON t.id=v.task_id
+              JOIN chain_submission s ON s.version_id=v.id
+            WHERE (
+              (#{taskRole}=TRUE AND (t.owner_org_id=#{orgId} OR t.operator_org_id=#{orgId})
+                AND EXISTS (SELECT 1 FROM task_member m WHERE m.task_id=v.task_id AND m.user_id=#{userId}))
+              OR EXISTS (SELECT 1 FROM access_grant g WHERE g.version_id=v.id AND g.applicant_id=#{userId}
+                AND g.status='APPROVED' AND g.valid_until &gt; #{now})
+            )
+            <if test='taskId != null'>AND v.task_id=#{taskId}</if>
+            <if test='requirementId != null'>AND v.requirement_id=#{requirementId}</if>
+            """;
+
+    @Select("SELECT UTC_TIMESTAMP(3)")
+    Instant now();
+
+    @Select("<script>SELECT COUNT(*) " + VISIBLE + "</script>")
+    long countVisible(@Param("userId") String userId, @Param("orgId") String orgId,
+                      @Param("taskRole") boolean taskRole, @Param("taskId") String taskId,
+                      @Param("requirementId") String requirementId, @Param("now") Instant now);
+
+    @Select("""
+            <script>
+            SELECT v.id,v.evidence_id,v.version_no,v.requirement_id,v.task_id,v.subtask_id,v.execution_id,
+              u.filename,u.content_type,v.size,v.sha256,v.review_status,v.created_at,
+              s.status AS anchor_status,s.confirmed_tx_id
+            """ + VISIBLE + " ORDER BY v.created_at DESC,v.id DESC LIMIT #{size} OFFSET #{offset}</script>")
+    List<VersionListItem> pageVisible(@Param("userId") String userId, @Param("orgId") String orgId,
+                                    @Param("taskRole") boolean taskRole, @Param("taskId") String taskId,
+                                    @Param("requirementId") String requirementId, @Param("now") Instant now,
+                                    @Param("size") int size, @Param("offset") long offset);
+
     @Select("""
             SELECT v.id,v.evidence_id,v.version_no,v.requirement_id,v.task_id,v.subtask_id,v.execution_id,
                    u.filename,u.content_type,v.size,v.sha256,v.review_status,v.created_at,t.owner_org_id,t.operator_org_id

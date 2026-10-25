@@ -33,6 +33,15 @@ public interface UploadMapper {
     @Select("SELECT " + SESSION_COLUMNS + " FROM upload_session WHERE actor_type='USER' AND actor_id=#{actorId} AND client_request_id=#{clientRequestId} FOR UPDATE")
     SessionRow lockByRequest(@Param("actorId") String actorId, @Param("clientRequestId") String clientRequestId);
 
+    @Select("SELECT " + SESSION_COLUMNS + " FROM upload_session WHERE actor_type='DEVICE' AND actor_id=#{actorId} AND client_request_id=#{clientRequestId}")
+    SessionRow findDeviceRequest(@Param("actorId") String actorId, @Param("clientRequestId") String clientRequestId);
+
+    @Select("SELECT " + SESSION_COLUMNS + " FROM upload_session WHERE actor_type='DEVICE' AND actor_id=#{actorId} AND client_request_id=#{clientRequestId} FOR UPDATE")
+    SessionRow lockDeviceRequest(@Param("actorId") String actorId, @Param("clientRequestId") String clientRequestId);
+
+    @Select("SELECT drone_id FROM task_execution WHERE id=#{id}")
+    String findExecutionDroneId(@Param("id") String id);
+
     @Insert("""
             INSERT INTO upload_session
                 (id, task_id, subtask_id, requirement_id, evidence_id, execution_id, submitter_org_id,

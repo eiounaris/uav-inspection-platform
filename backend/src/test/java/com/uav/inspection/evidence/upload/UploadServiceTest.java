@@ -17,6 +17,8 @@ import com.uav.inspection.evidence.upload.persistence.UploadMapper.TaskRow;
 import com.uav.inspection.identity.CurrentUser;
 import com.uav.inspection.identity.ResourcePermissionService;
 import com.uav.inspection.identity.Role;
+import com.uav.inspection.device.CurrentDevice;
+import com.uav.inspection.device.DeviceAuthenticationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -88,6 +90,7 @@ class UploadServiceTest {
     private final UploadMapper uploads = mock(UploadMapper.class);
     private final ResourcePermissionService permissions = mock(ResourcePermissionService.class);
     private final AuditMapper audit = mock(AuditMapper.class);
+    private final DeviceAuthenticationService devices = mock(DeviceAuthenticationService.class);
     private final RecordingTransactionManager transactionManager = new RecordingTransactionManager();
 
     @BeforeEach
@@ -224,6 +227,105 @@ class UploadServiceTest {
         assertPreflightCommittedAndRegistrationRolledBack();
     }
 
+    @Test
+    void deviceDisabledDuringFileIoCannotRegisterItsPartAfterPreflight() {
+        var device = device();
+        UploadTransactions actual = actualDevicePhases(device);
+        actual.preparePartDevice(device, UPLOAD, 1);
+        when(devices.currentDevice(device, true)).thenThrow(new BusinessException(ErrorCode.UNAUTHORIZED));
+
+        BusinessException failure = assertThrows(BusinessException.class,
+                () -> actual.storePartDevice(device, UPLOAD, 1, image.length, "a".repeat(64), WINNER_KEY));
+
+        assertEquals(ErrorCode.UNAUTHORIZED, failure.errorCode());
+        verify(devices, times(2)).currentDevice(device, true);
+        verify(uploads, never()).insertPart(any());
+        verifyNoInteractions(audit);
+        assertPreflightCommittedAndRegistrationRolledBack();
+    }
+
+    @Test
+    void deviceCannotUseAnExecutionAssignedToAnotherDevice() {
+        var device = device();
+        UploadTransactions actual = actualDevicePhases(device);
+        when(uploads.findExecutionDroneId(EXECUTION)).thenReturn("20000000-0000-4000-8000-000000000002");
+
+        var failure = assertThrows(BusinessException.class, () -> actual.preparePartDevice(device, UPLOAD, 1));
+
+        assertEquals(ErrorCode.FORBIDDEN, failure.errorCode());
+        verify(uploads, never()).lockSession(anyString());
+        verifyNoInteractions(audit);
+    }
+
+    @Test
+    void deviceIdentityCannotReadAUserOwnedSession() {
+        var device = device();
+        UploadTransactions actual = actualDevicePhases(device);
+        when(uploads.findSession(UPLOAD)).thenReturn(session("UPLOADING"));
+        when(uploads.findTask(TASK)).thenReturn(new TaskRow(TASK, OWNER, OPERATOR, "RUNNING"));
+        when(devices.currentDevice(device, false)).thenReturn(device);
+
+        var failure = assertThrows(BusinessException.class, () -> actual.getDevice(device, UPLOAD));
+
+        assertEquals(ErrorCode.FORBIDDEN, failure.errorCode());
+        verifyNoInteractions(permissions, audit);
+    }
+
+    @Test
+    void devicePartUsesTheSameStreamingBoundaryOutsideTransactions() throws IOException {
+        var device = device();
+        when(phases.preparePartDevice(device, UPLOAD, 1)).thenReturn(new PartPlan(UPLOAD, 1, image.length, "image/png"));
+        doAnswer(invocation -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            assertArrayEquals(image, Files.readAllBytes(invocation.getArgument(1, Path.class)));
+            return null;
+        }).when(storage).put(anyString(), any(Path.class), eq("image/png"));
+        when(phases.storePartDevice(eq(device), eq(UPLOAD), eq(1), eq((long) image.length), anyString(), anyString()))
+                .thenAnswer(invocation -> new PartCommit(result(invocation.getArgument(4)), invocation.getArgument(5)));
+
+        assertEquals(image.length, orchestrator().uploadDevicePart(device, UPLOAD, 1, body(), image.length).size());
+
+        verifyNoInteractions(permissions);
+        assertTemporaryDirectoryEmpty();
+    }
+
+    @Test
+    void formerlyAssignedDeviceCanResumeItsClosedBatchWithoutChangingTheReplacement() {
+        var device = device();
+        UploadTransactions actual = actualDevicePhases(device);
+        when(uploads.lockSubtask(SUBTASK)).thenReturn(new SubtaskRow(SUBTASK, TASK, "replacement-execution"));
+        var closed = new ExecutionRow(EXECUTION, SUBTASK, "CLOSED");
+        when(uploads.findExecution(EXECUTION)).thenReturn(closed);
+        when(uploads.lockExecution(EXECUTION)).thenReturn(closed);
+        when(uploads.insertPart(any())).thenReturn(1);
+        when(uploads.touchWritableSession(UPLOAD, 0)).thenReturn(1);
+        when(audit.insertDeviceResourceSuccess(anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString())).thenReturn(1);
+
+        assertEquals(UPLOAD, actual.preparePartDevice(device, UPLOAD, 1).uploadId());
+        assertEquals(UPLOAD, actual.storePartDevice(device, UPLOAD, 1, image.length, "a".repeat(64), WINNER_KEY).result().uploadId());
+
+        verify(uploads, never()).lockExecution("replacement-execution");
+        verify(uploads).insertPart(any());
+        verifyNoInteractions(permissions);
+    }
+
+    @Test
+    void readyOrInconsistentBatchAndCompletedTaskStillCannotAcceptHistoricalParts() {
+        var device = device();
+        UploadTransactions actual = actualDevicePhases(device);
+        when(uploads.lockSubtask(SUBTASK)).thenReturn(new SubtaskRow(SUBTASK, TASK, "replacement-execution"));
+        for (String state : List.of("READY", "RUNNING")) {
+            when(uploads.lockExecution(EXECUTION)).thenReturn(new ExecutionRow(EXECUTION, SUBTASK, state));
+            assertEquals(ErrorCode.VERSION_CONFLICT,
+                    assertThrows(BusinessException.class, () -> actual.preparePartDevice(device, UPLOAD, 1)).errorCode());
+        }
+        when(uploads.lockExecution(EXECUTION)).thenReturn(new ExecutionRow(EXECUTION, SUBTASK, "CLOSED"));
+        when(uploads.lockTask(TASK)).thenReturn(new TaskRow(TASK, OWNER, OPERATOR, "COMPLETED"));
+        assertEquals(ErrorCode.TASK_COMPLETED,
+                assertThrows(BusinessException.class, () -> actual.preparePartDevice(device, UPLOAD, 1)).errorCode());
+        verify(uploads, never()).insertPart(any());
+    }
+
     private void prepareMockPhases() {
         when(phases.preparePart(ACTOR, UPLOAD, 1))
                 .thenReturn(new PartPlan(UPLOAD, 1, image.length, "image/png"));
@@ -247,7 +349,23 @@ class UploadServiceTest {
         when(uploads.findExecution(EXECUTION)).thenReturn(execution);
         when(uploads.lockExecution(EXECUTION)).thenReturn(execution);
         when(uploads.databaseNow()).thenReturn(NOW);
-        return proxy(new UploadTransactions(uploads, permissions, audit, settings));
+        return proxy(new UploadTransactions(uploads, permissions, audit, settings, devices));
+    }
+
+    private UploadTransactions actualDevicePhases(CurrentDevice device) {
+        UploadTransactions actual = actualTransactionalPhases();
+        when(devices.currentDevice(device, true)).thenReturn(device);
+        when(uploads.findExecutionDroneId(EXECUTION)).thenReturn(device.id());
+        SessionRow session = new SessionRow(UPLOAD, TASK, SUBTASK, REQUIREMENT, EVIDENCE, EXECUTION, OPERATOR,
+                "DEVICE", device.id(), CLIENT_REQUEST, "b".repeat(64), "test.png", "image/png",
+                image.length, 1048576, 1, "UPLOADING", NOW.plusSeconds(3600), 0, NOW, NOW);
+        when(uploads.findSession(UPLOAD)).thenReturn(session);
+        when(uploads.lockSession(UPLOAD)).thenReturn(session);
+        return actual;
+    }
+
+    private static CurrentDevice device() {
+        return new CurrentDevice("20000000-0000-4000-8000-000000000001", OPERATOR, "test-drone", "d".repeat(64));
     }
 
     private SessionRow session(String status) {

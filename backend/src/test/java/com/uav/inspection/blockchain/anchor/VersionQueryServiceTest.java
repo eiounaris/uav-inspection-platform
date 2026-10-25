@@ -56,7 +56,8 @@ class VersionQueryServiceTest {
         when(identities.authenticate(actor.id(), actor.tokenVersion())).thenReturn(actor);
         when(mapper.version(ID)).thenReturn(row());
         assertForbidden(() -> service.anchor(actor, ID));
-        verifyNoInteractions(scopes);
+        verify(scopes, never()).countMembership(anyString(), anyString());
+        verify(scopes).grant(ID, actor.id());
         verify(mapper, never()).anchor(ID);
     }
 
@@ -75,6 +76,43 @@ class VersionQueryServiceTest {
         assertNull(result.anchor().confirmedTxId());
         assertEquals("a".repeat(64), result.anchor().transactionId());
         assertEquals("PENDING", result.reviewStatus());
+    }
+
+    @Test
+    void anExplicitVersionGrantAllowsTheDetailWithoutOpeningTheTask() {
+        CurrentUser actor = user(Role.ORG_ADMIN);
+        when(identities.authenticate(actor.id(), actor.tokenVersion())).thenReturn(actor);
+        when(mapper.version(ID)).thenReturn(row());
+        when(scopes.grant(ID, actor.id())).thenReturn(new TaskScopeMapper.GrantScope("grant", Instant.EPOCH.plusSeconds(10)));
+        when(scopes.now()).thenReturn(Instant.EPOCH);
+        when(mapper.anchor(ID)).thenReturn(new AnchorView("submission", ID, "CONFIRMED", "a".repeat(64),
+                "OrgBMSP", false, 0, null, null, null, null, null, null));
+        assertEquals(ID, service.version(actor, ID).id());
+        assertForbidden(() -> permissions.requireTask(actor, "task", OWNER, OPERATOR, null));
+    }
+
+    @Test
+    void listingPassesTheCurrentIdentityAndOneDatabaseInstantToBothFilteredQueries() {
+        CurrentUser actor = user(Role.ORG_ADMIN);
+        when(identities.authenticate(actor.id(), actor.tokenVersion())).thenReturn(actor);
+        when(mapper.now()).thenReturn(Instant.EPOCH);
+        when(mapper.countVisible(actor.id(), OWNER, false, null, null, Instant.EPOCH)).thenReturn(3L);
+        when(mapper.pageVisible(actor.id(), OWNER, false, null, null, Instant.EPOCH, 2, 2)).thenReturn(List.of());
+        var result = service.list(actor, null, null, 2, 2);
+        assertEquals(3L, result.total());
+        verify(mapper).pageVisible(actor.id(), OWNER, false, null, null, Instant.EPOCH, 2, 2);
+        verify(mapper, never()).version(anyString());
+        verifyNoInteractions(scopes);
+    }
+
+    @Test
+    void invalidListGeometryOrFilterIsRejectedBeforeReadingAnyResource() {
+        CurrentUser actor = user(Role.OWNER_REVIEWER);
+        assertEquals(ErrorCode.INVALID_ARGUMENT, assertThrows(BusinessException.class,
+                () -> service.list(actor, null, null, 0, 20)).errorCode());
+        assertEquals(ErrorCode.INVALID_ARGUMENT, assertThrows(BusinessException.class,
+                () -> service.list(actor, null, "invalid", 1, 20)).errorCode());
+        verifyNoInteractions(mapper, identities, scopes);
     }
 
     private CurrentUser user(Role role) {

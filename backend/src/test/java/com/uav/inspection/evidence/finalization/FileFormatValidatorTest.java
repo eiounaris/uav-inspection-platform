@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.zip.CRC32;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -36,6 +37,31 @@ class FileFormatValidatorTest {
         Files.write(image,data);
         assertThrows(FileFormatValidator.InvalidFile.class,()->validator.validate(image,"image/png"));
         Files.write(image,Arrays.copyOf(data,8));
+        assertThrows(FileFormatValidator.InvalidFile.class,()->validator.validate(image,"image/png"));
+    }
+
+    @Test
+    void anUnknownCriticalPngChunkCannotBeSilentlyIgnoredDespiteAValidCrc() throws Exception {
+        Path image=directory.resolve("image.png");
+        ImageIO.write(new BufferedImage(2,2,BufferedImage.TYPE_INT_RGB),"png",image.toFile());
+        byte[] valid=Files.readAllBytes(image);
+        Files.write(image,withPngChunk(valid,"ABCD"));
+
+        assertThrows(FileFormatValidator.InvalidFile.class,()->validator.validate(image,"image/png"));
+
+        // W3C decoder guidance permits unknown ancillary chunks, even with the reserved bit set.
+        for(String ancillary:new String[]{"vpAg","vpax"}) {
+            Files.write(image,withPngChunk(valid,ancillary));
+            assertDoesNotThrow(()->validator.validate(image,"image/png"));
+        }
+    }
+
+    @Test
+    void pngRejectsTrailingBytesAfterItsEndChunk() throws Exception {
+        Path image=directory.resolve("image.png");
+        ImageIO.write(new BufferedImage(2,2,BufferedImage.TYPE_INT_RGB),"png",image.toFile());
+        byte[] valid=Files.readAllBytes(image);
+        Files.write(image,Arrays.copyOf(valid,valid.length+1));
         assertThrows(FileFormatValidator.InvalidFile.class,()->validator.validate(image,"image/png"));
     }
 
@@ -80,6 +106,17 @@ class FileFormatValidatorTest {
         var bytes=new ByteArrayOutputStream();
         try(var output=new DataOutputStream(bytes)) { output.writeInt(body.length+8); output.writeBytes(type); output.write(body); }
         return bytes.toByteArray();
+    }
+
+    private static byte[] withPngChunk(byte[] original,String name) throws Exception {
+        var result=new ByteArrayOutputStream();
+        result.write(original,0,33); // signature + complete IHDR
+        var output=new DataOutputStream(result);
+        byte[] type=name.getBytes(StandardCharsets.US_ASCII);
+        var crc=new CRC32(); crc.update(type);
+        output.writeInt(0); output.write(type); output.writeInt((int)crc.getValue());
+        result.write(original,33,original.length-33);
+        return result.toByteArray();
     }
 
     private static byte[] concat(byte[]... parts) throws Exception {

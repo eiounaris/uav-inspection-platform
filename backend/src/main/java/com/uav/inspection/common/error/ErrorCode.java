@@ -14,7 +14,7 @@ public enum ErrorCode {
     UPLOAD_SESSION_EXPIRED(HttpStatus.CONFLICT, "上传会话已过期"),
     UPLOAD_NOT_WRITABLE(HttpStatus.CONFLICT, "上传会话当前不能写入"),
     UPLOAD_PARTS_INCOMPLETE(HttpStatus.CONFLICT, "上传分片尚未完整登记"),
-    TASK_COMPLETED(HttpStatus.CONFLICT, "任务已完成，不能继续上传"),
+    TASK_COMPLETED(HttpStatus.CONFLICT, "任务已完成，不能继续修改"),
     FILE_TOO_LARGE(HttpStatus.CONTENT_TOO_LARGE, "上传内容超出大小限制"),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "请求内容类型不支持"),
     DEPENDENCY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "依赖服务暂不可用"),

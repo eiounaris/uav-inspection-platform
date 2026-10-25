@@ -46,11 +46,30 @@ public class FinalizationProcessor {
     private void process(MessageEvent event,boolean recovery) {
         Claim claim=phases.claim(event,recovery);
         if(claim==null) return;
+        Candidate candidate;
+        try {
+            candidate=storeCandidate(claim);
+        } catch(InvalidFile failure) {
+            phases.checkpoint(claim,true,failure.code()); return;
+        } catch(LocalSpaceUnavailable failure) {
+            phases.checkpoint(claim,false,"LOCAL_SPACE_UNAVAILABLE"); return;
+        } catch(BusinessException failure) {
+            phases.checkpoint(claim,false,"STORAGE_UNAVAILABLE"); return;
+        } catch(IOException failure) {
+            phases.checkpoint(claim,false,"FILE_IO_UNAVAILABLE"); return;
+        }
+        // A database/commit failure must escape, even if represented as a BusinessException.
+        // Never delete this candidate when the commit result or lease ownership is uncertain.
+        phases.finish(claim,candidate.objectKey(),claim.session().expectedSize(),candidate.digest());
+    }
+
+    /** Only file and object-storage I/O belongs in the processor's retry classification. */
+    private Candidate storeCandidate(Claim claim) throws IOException {
         Path temporary=null;
         try {
             if(Files.getFileStore(settings.tempDirectory()).getUsableSpace()
                     <Math.addExact(claim.session().expectedSize(),settings.minFreeSpace())) {
-                phases.checkpoint(claim,false,"LOCAL_SPACE_UNAVAILABLE"); return;
+                throw new LocalSpaceUnavailable();
             }
             temporary=Files.createTempFile(settings.tempDirectory(),"finalize-",".tmp",
                     PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
@@ -58,14 +77,7 @@ public class FinalizationProcessor {
             formats.validate(temporary,claim.session().contentType());
             String objectKey="evidence-files/"+claim.session().id()+"/"+claim.token();
             storage.put(objectKey,temporary,claim.session().contentType());
-            // Never delete this candidate if the DB result is lost or another lease has taken over.
-            phases.finish(claim,objectKey,claim.session().expectedSize(),digest);
-        } catch(InvalidFile failure) {
-            phases.checkpoint(claim,true,failure.code());
-        } catch(BusinessException failure) {
-            phases.checkpoint(claim,false,"STORAGE_UNAVAILABLE");
-        } catch(IOException failure) {
-            phases.checkpoint(claim,false,"FILE_IO_UNAVAILABLE");
+            return new Candidate(objectKey,digest);
         } finally {
             if(temporary!=null) {
                 try { Files.deleteIfExists(temporary); }
@@ -106,4 +118,7 @@ public class FinalizationProcessor {
         try { return MessageDigest.getInstance("SHA-256"); }
         catch(NoSuchAlgorithmException failure) { throw new IllegalStateException("SHA-256 unavailable"); }
     }
+
+    private record Candidate(String objectKey,String digest) {}
+    private static final class LocalSpaceUnavailable extends IOException {}
 }

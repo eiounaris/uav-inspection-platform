@@ -9,6 +9,8 @@ import com.uav.inspection.evidence.upload.UploadModels.*;
 import com.uav.inspection.evidence.upload.persistence.UploadMapper;
 import com.uav.inspection.evidence.upload.persistence.UploadMapper.*;
 import com.uav.inspection.identity.CurrentUser;
+import com.uav.inspection.device.CurrentDevice;
+import com.uav.inspection.device.DeviceAuthenticationService;
 import com.uav.inspection.identity.ResourcePermissionService;
 import com.uav.inspection.identity.Role;
 import org.springframework.context.annotation.Profile;
@@ -31,19 +33,30 @@ public class UploadTransactions {
     private final ResourcePermissionService permissions;
     private final AuditMapper audit;
     private final UploadSettings settings;
+    private final DeviceAuthenticationService devices;
 
     public UploadTransactions(UploadMapper uploads, ResourcePermissionService permissions,
-                              AuditMapper audit, UploadSettings settings) {
+                              AuditMapper audit, UploadSettings settings, DeviceAuthenticationService devices) {
         this.uploads = uploads;
         this.permissions = permissions;
         this.audit = audit;
         this.settings = settings;
+        this.devices = devices;
     }
 
     @Transactional
     public UploadProgress create(CurrentUser supplied, CreateUploadRequest request, String requestHash) {
+        return create(Actor.user(supplied), request, requestHash);
+    }
+
+    @Transactional
+    public UploadProgress createDevice(CurrentDevice supplied, CreateUploadRequest request, String requestHash) {
+        return create(Actor.device(supplied), request, requestHash);
+    }
+
+    private UploadProgress create(Actor supplied, CreateUploadRequest request, String requestHash) {
         requireSupplied(supplied);
-        SessionRow existing = uploads.findByRequest(supplied.id(), request.clientRequestId());
+        SessionRow existing = requestFor(supplied, request.clientRequestId(), false);
         if (existing != null) {
             LockedUpload locked = lockUpload(supplied, existing);
             sameRequest(locked.session(), requestHash);
@@ -52,7 +65,7 @@ public class UploadTransactions {
         RequirementRow located = uploads.findRequirement(request.requirementId());
         Scope scope = lockScope(supplied, located, request.executionId());
         // The actor row lock serializes this user's keys even when competing requests name different tasks.
-        existing = uploads.lockByRequest(scope.actor().id(), request.clientRequestId());
+        existing = requestFor(scope.actor(), request.clientRequestId(), true);
         if (existing != null) {
             sameRequest(existing, requestHash);
             if (!existing.taskId().equals(scope.task().id())) {
@@ -68,7 +81,7 @@ public class UploadTransactions {
         Instant expiry = now.plus(settings.sessionTtl()).truncatedTo(ChronoUnit.MILLIS);
         SessionRow session = new SessionRow(UUID.randomUUID().toString(), scope.task().id(), scope.subtask().id(),
                 scope.requirement().id(), scope.requirement().evidenceId(), scope.execution().id(), OPERATOR,
-                "USER", scope.actor().id(), request.clientRequestId(), requestHash, request.filename(),
+                scope.actor().type(), scope.actor().id(), request.clientRequestId(), requestHash, request.filename(),
                 request.contentType(), request.size(), settings.partSize(), (int) count, "UPLOADING", expiry,
                 0, now, now);
         one(uploads.insertSession(session));
@@ -78,16 +91,34 @@ public class UploadTransactions {
 
     @Transactional(readOnly = true)
     public UploadProgress get(CurrentUser supplied, String uploadId) {
+        return get(Actor.user(supplied), uploadId);
+    }
+
+    @Transactional(readOnly = true)
+    public UploadProgress getDevice(CurrentDevice supplied, String uploadId) {
+        return get(Actor.device(supplied), uploadId);
+    }
+
+    private UploadProgress get(Actor supplied, String uploadId) {
         SessionRow session = requireSession(uploads.findSession(uploadId));
-        CurrentUser actor = permissions.currentActor(supplied, false);
+        Actor actor = current(supplied, false);
         TaskRow task = requireTask(uploads.findTask(session.taskId()));
-        authorize(actor, task);
+        authorize(actor, task, session.executionId());
         owner(session, actor);
         return progress(session);
     }
 
     @Transactional
     public PartPlan preparePart(CurrentUser supplied, String uploadId, int partNo) {
+        return preparePart(Actor.user(supplied), uploadId, partNo);
+    }
+
+    @Transactional
+    public PartPlan preparePartDevice(CurrentDevice supplied, String uploadId, int partNo) {
+        return preparePart(Actor.device(supplied), uploadId, partNo);
+    }
+
+    private PartPlan preparePart(Actor supplied, String uploadId, int partNo) {
         LockedUpload locked = lockUpload(supplied, requireSession(uploads.findSession(uploadId)));
         writable(locked);
         return plan(locked.session(), partNo);
@@ -96,6 +127,15 @@ public class UploadTransactions {
     /** Called from the completion transaction so permission and scope locks live through its commit. */
     @Transactional
     public SessionRow lockForCompletion(CurrentUser supplied, String uploadId) {
+        return lockForCompletion(Actor.user(supplied), uploadId);
+    }
+
+    @Transactional
+    public SessionRow lockForCompletionDevice(CurrentDevice supplied, String uploadId) {
+        return lockForCompletion(Actor.device(supplied), uploadId);
+    }
+
+    private SessionRow lockForCompletion(Actor supplied, String uploadId) {
         UploadValidation.id(uploadId);
         LockedUpload locked = lockUpload(supplied, requireSession(uploads.findSession(uploadId)));
         if ("UPLOADING".equals(locked.session().status()) || "EXPIRED".equals(locked.session().status())) {
@@ -107,6 +147,15 @@ public class UploadTransactions {
     /** Returns a known identical part, or null when an object must be saved. */
     @Transactional
     public PartResult findIdenticalPart(CurrentUser supplied, String uploadId, int partNo, long size, String sha256) {
+        return findIdenticalPart(Actor.user(supplied), uploadId, partNo, size, sha256);
+    }
+
+    @Transactional
+    public PartResult findIdenticalPartDevice(CurrentDevice supplied, String uploadId, int partNo, long size, String sha256) {
+        return findIdenticalPart(Actor.device(supplied), uploadId, partNo, size, sha256);
+    }
+
+    private PartResult findIdenticalPart(Actor supplied, String uploadId, int partNo, long size, String sha256) {
         LockedUpload locked = lockUpload(supplied, requireSession(uploads.findSession(uploadId)));
         writable(locked);
         UploadValidation.exactLength(size, plan(locked.session(), partNo).expectedSize());
@@ -120,6 +169,17 @@ public class UploadTransactions {
 
     @Transactional
     public PartCommit storePart(CurrentUser supplied, String uploadId, int partNo, long size,
+                                 String sha256, String candidateKey) {
+        return storePart(Actor.user(supplied), uploadId, partNo, size, sha256, candidateKey);
+    }
+
+    @Transactional
+    public PartCommit storePartDevice(CurrentDevice supplied, String uploadId, int partNo, long size,
+                                 String sha256, String candidateKey) {
+        return storePart(Actor.device(supplied), uploadId, partNo, size, sha256, candidateKey);
+    }
+
+    private PartCommit storePart(Actor supplied, String uploadId, int partNo, long size,
                                  String sha256, String candidateKey) {
         LockedUpload locked = lockUpload(supplied, requireSession(uploads.findSession(uploadId)));
         writable(locked);
@@ -148,7 +208,7 @@ public class UploadTransactions {
         return new PartCommit(result(part), candidateKey);
     }
 
-    private LockedUpload lockUpload(CurrentUser supplied, SessionRow seed) {
+    private LockedUpload lockUpload(Actor supplied, SessionRow seed) {
         RequirementRow located = uploads.findRequirement(seed.requirementId());
         Scope scope = lockScope(supplied, located, seed.executionId());
         owner(seed, scope.actor());
@@ -163,13 +223,15 @@ public class UploadTransactions {
         return new LockedUpload(scope, session);
     }
 
-    private Scope lockScope(CurrentUser supplied, RequirementRow located, String executionId) {
+    private Scope lockScope(Actor supplied, RequirementRow located, String executionId) {
         if (located == null) {
             throw new BusinessException(ErrorCode.FORBIDDEN);
         }
         TaskRow task = requireTask(uploads.lockTask(located.taskId()));
-        CurrentUser actor = permissions.currentActor(supplied, true);
-        authorize(actor, task);
+        requireSupplied(supplied);
+        // User locks precede children; device locks follow them, as task start does.
+        Actor actor = supplied.device() == null ? current(supplied, true) : supplied;
+        if (actor.device() == null) authorize(actor, task, executionId);
         if (located.subtaskId() == null) {
             throw new BusinessException(ErrorCode.VERSION_CONFLICT);
         }
@@ -184,18 +246,40 @@ public class UploadTransactions {
         }
         ExecutionRow execution = uploads.lockExecution(executionId);
         UploadValidation.invalid(execution == null || !subtask.id().equals(execution.subtaskId()));
+        if (actor.device() != null) {
+            actor = current(supplied, true);
+            authorize(actor, task, executionId);
+        }
         return new Scope(actor, task, subtask, requirement, execution);
     }
 
-    private void authorize(CurrentUser actor, TaskRow task) {
-        if (!OPERATOR.equals(actor.orgId()) || !actor.roles().contains(Role.OPERATOR_USER)) {
-            throw new BusinessException(ErrorCode.FORBIDDEN);
-        }
-        permissions.requireTask(actor, task.id(), task.ownerOrgId(), task.operatorOrgId(), Role.OPERATOR_USER);
+    private Actor current(Actor supplied, boolean forUpdate) {
+        requireSupplied(supplied);
+        return supplied.device() != null ? Actor.device(devices.currentDevice(supplied.device(), forUpdate))
+                : Actor.user(permissions.currentActor(supplied.user(), forUpdate));
     }
 
-    private static void owner(SessionRow session, CurrentUser actor) {
-        if (!"USER".equals(session.actorType()) || !actor.id().equals(session.actorId())) {
+    private SessionRow requestFor(Actor actor, String key, boolean locked) {
+        return actor.device() != null ? (locked ? uploads.lockDeviceRequest(actor.id(), key) : uploads.findDeviceRequest(actor.id(), key))
+                : (locked ? uploads.lockByRequest(actor.id(), key) : uploads.findByRequest(actor.id(), key));
+    }
+
+    private void authorize(Actor actor, TaskRow task, String executionId) {
+        if (actor.device() != null) {
+            if (!OPERATOR.equals(actor.orgId()) || !actor.orgId().equals(task.operatorOrgId())
+                    || !actor.id().equals(uploads.findExecutionDroneId(executionId))) {
+                throw new BusinessException(ErrorCode.FORBIDDEN);
+            }
+            return;
+        }
+        if (!OPERATOR.equals(actor.orgId()) || !actor.user().roles().contains(Role.OPERATOR_USER)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN);
+        }
+        permissions.requireTask(actor.user(), task.id(), task.ownerOrgId(), task.operatorOrgId(), Role.OPERATOR_USER);
+    }
+
+    private static void owner(SessionRow session, Actor actor) {
+        if (!actor.type().equals(session.actorType()) || !actor.id().equals(session.actorId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN);
         }
     }
@@ -204,9 +288,11 @@ public class UploadTransactions {
         if ("COMPLETED".equals(scope.task().status())) {
             throw new BusinessException(ErrorCode.TASK_COMPLETED);
         }
+        boolean current = scope.execution().id().equals(scope.subtask().currentExecutionId());
+        boolean currentRunning = current && "RUNNING".equals(scope.execution().status());
+        boolean closedHistory = !current && "CLOSED".equals(scope.execution().status());
         if (!Set.of("RUNNING", "WAITING_ACCEPTANCE").contains(scope.task().status())
-                || !scope.execution().id().equals(scope.subtask().currentExecutionId())
-                || !"RUNNING".equals(scope.execution().status())) {
+                || !(currentRunning || closedHistory)) {
             throw new BusinessException(ErrorCode.VERSION_CONFLICT);
         }
     }
@@ -248,12 +334,13 @@ public class UploadTransactions {
                 session.expiresAt(), List.copyOf(parts), uploadedSize, uploads.findVersionId(session.id()));
     }
 
-    private void appendAudit(CurrentUser actor, String action, String sessionId) {
+    private void appendAudit(Actor actor, String action, String sessionId) {
         String traceId = TraceContext.currentTraceId();
         if (traceId == null || !traceId.matches("[A-Za-z0-9_-]{1,64}")) {
             traceId = UUID.randomUUID().toString();
         }
-        one(audit.insertResourceSuccess(UUID.randomUUID().toString(), actor.id(), actor.orgId(), action,
+        one(actor.device() == null ? audit.insertResourceSuccess(UUID.randomUUID().toString(), actor.id(), actor.orgId(), action,
+                "UPLOAD_SESSION", sessionId, traceId) : audit.insertDeviceResourceSuccess(UUID.randomUUID().toString(), actor.id(), actor.orgId(), action,
                 "UPLOAD_SESSION", sessionId, traceId));
     }
 
@@ -287,7 +374,7 @@ public class UploadTransactions {
         return row;
     }
 
-    private static void requireSupplied(CurrentUser actor) {
+    private static void requireSupplied(Actor actor) {
         if (actor == null) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED);
         }
@@ -299,7 +386,15 @@ public class UploadTransactions {
         }
     }
 
-    private record Scope(CurrentUser actor, TaskRow task, SubtaskRow subtask,
+    private record Actor(CurrentUser user, CurrentDevice device) {
+        static Actor user(CurrentUser value) { return value == null ? null : new Actor(value, null); }
+        static Actor device(CurrentDevice value) { return value == null ? null : new Actor(null, value); }
+        String id() { return device == null ? user.id() : device.id(); }
+        String orgId() { return device == null ? user.orgId() : device.orgId(); }
+        String type() { return device == null ? "USER" : "DEVICE"; }
+    }
+
+    private record Scope(Actor actor, TaskRow task, SubtaskRow subtask,
                           RequirementRow requirement, ExecutionRow execution) {}
     private record LockedUpload(Scope scope, SessionRow session) {}
 }

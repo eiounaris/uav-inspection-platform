@@ -7,7 +7,9 @@ import com.uav.inspection.identity.persistence.TaskScopeMapper;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
-/** Task-path permissions. Version-specific sharing permissions will be added with T020. */
+import java.time.Instant;
+
+/** Current task membership or an explicit grant for exactly one fixed evidence version. */
 @Service
 @Profile("database")
 public class ResourcePermissionService {
@@ -54,12 +56,45 @@ public class ResourcePermissionService {
 
     public void requireTask(CurrentUser current, String taskId, String ownerOrgId, String operatorOrgId,
                             Role requiredRole) {
-        boolean inTaskOrganization = OWNER.equals(current.orgId()) && current.orgId().equals(ownerOrgId)
-                || OPERATOR.equals(current.orgId()) && current.orgId().equals(operatorOrgId);
-        if (!inTaskOrganization || !canReadTasks(current)
-                || requiredRole != null && !current.roles().contains(requiredRole)
-                || scopes.countMembership(taskId, current.id()) != 1) {
+        if (current == null || requiredRole != null && !current.roles().contains(requiredRole)
+                || !canReadTask(current, taskId, ownerOrgId, operatorOrgId)) {
             throw new BusinessException(ErrorCode.FORBIDDEN);
         }
     }
+
+    public boolean canReadTask(CurrentUser current, String taskId, String ownerOrgId, String operatorOrgId) {
+        if (current == null) return false;
+        boolean inTaskOrganization = OWNER.equals(current.orgId()) && current.orgId().equals(ownerOrgId)
+                || OPERATOR.equals(current.orgId()) && current.orgId().equals(operatorOrgId);
+        return inTaskOrganization && canReadTasks(current) && scopes.countMembership(taskId, current.id()) == 1;
+    }
+
+    /** Task-wide audit and business relations require a managing or reviewing member. */
+    public void requireTaskHistory(CurrentUser current, String taskId, String ownerOrgId, String operatorOrgId) {
+        boolean managing = current != null && (
+                OWNER.equals(current.orgId()) && current.roles().stream().anyMatch(role ->
+                        role == Role.OWNER_TASK_ADMIN || role == Role.OWNER_REVIEWER || role == Role.OWNER_DATA_APPROVER)
+                || OPERATOR.equals(current.orgId()) && current.roles().contains(Role.OPERATOR_TASK_ADMIN));
+        if (!managing) throw new BusinessException(ErrorCode.FORBIDDEN);
+        requireTask(current, taskId, ownerOrgId, operatorOrgId, null);
+    }
+
+    /** The caller has reauthenticated; a locking call also holds the parent task lock. */
+    public VersionAccess requireVersion(CurrentUser current, String versionId, String taskId,
+                                        String ownerOrgId, String operatorOrgId, boolean forUpdate) {
+        if (canReadTask(current, taskId, ownerOrgId, operatorOrgId)) {
+            return new VersionAccess(true, null, null);
+        }
+        if (current == null || !(OWNER.equals(current.orgId()) || OPERATOR.equals(current.orgId()))) {
+            throw new BusinessException(ErrorCode.FORBIDDEN);
+        }
+        var grant = forUpdate ? scopes.lockGrant(versionId, current.id()) : scopes.grant(versionId, current.id());
+        // Evaluate time after a possible row-lock wait, not only in the original SELECT predicate.
+        if (grant == null || !grant.validUntil().isAfter(scopes.now())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN);
+        }
+        return new VersionAccess(false, grant.id(), grant.validUntil());
+    }
+
+    public record VersionAccess(boolean taskPath, String grantId, Instant validUntil) {}
 }

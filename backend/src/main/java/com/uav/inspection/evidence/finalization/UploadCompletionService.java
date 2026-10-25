@@ -11,6 +11,7 @@ import com.uav.inspection.evidence.upload.persistence.UploadMapper;
 import com.uav.inspection.evidence.upload.persistence.UploadMapper.PartRow;
 import com.uav.inspection.evidence.upload.persistence.UploadMapper.SessionRow;
 import com.uav.inspection.identity.CurrentUser;
+import com.uav.inspection.device.CurrentDevice;
 import com.uav.inspection.messaging.OutboxWriter;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -40,15 +41,33 @@ public class UploadCompletionService {
     @Transactional
     public UploadProgress complete(CurrentUser actor, String uploadId) {
         SessionRow session = uploads.lockForCompletion(actor, uploadId);
+        completeLocked(session);
+        return uploads.get(actor, uploadId);
+    }
+
+    @Transactional
+    public UploadProgress completeDevice(CurrentDevice actor, String uploadId) {
+        SessionRow session = uploads.lockForCompletionDevice(actor, uploadId);
+        completeLocked(session);
+        return uploads.getDevice(actor, uploadId);
+    }
+
+    private void completeLocked(SessionRow session) {
+        String uploadId = session.id();
         if ("UPLOADING".equals(session.status())) {
             requireCompleteParts(session, parts.listParts(uploadId));
-            one(finalizations.freeze(uploadId, session.lockVersion()));
+            if (finalizations.freeze(uploadId, session.lockVersion()) != 1) {
+                if (!session.expiresAt().isAfter(parts.databaseNow())) {
+                    throw new BusinessException(ErrorCode.UPLOAD_SESSION_EXPIRED);
+                }
+                throw new BusinessException(ErrorCode.VERSION_CONFLICT);
+            }
             String trace = safeTrace();
             outbox.enqueue("FILE_FINALIZE_REQUESTED", uploadId, trace);
-            one(audit.insertResourceSuccess(UUID.randomUUID().toString(), actor.id(), actor.orgId(),
+            one("DEVICE".equals(session.actorType()) ? audit.insertDeviceResourceSuccess(UUID.randomUUID().toString(), session.actorId(), session.submitterOrgId(),
+                    "UPLOAD_COMPLETION_REQUESTED", "UPLOAD_SESSION", uploadId, trace) : audit.insertResourceSuccess(UUID.randomUUID().toString(), session.actorId(), session.submitterOrgId(),
                     "UPLOAD_COMPLETION_REQUESTED", "UPLOAD_SESSION", uploadId, trace));
         }
-        return uploads.get(actor, uploadId);
     }
 
     static void requireCompleteParts(SessionRow session, List<PartRow> parts) {

@@ -74,9 +74,33 @@ public class TaskController {
         return ApiResponse.success(tasks.createExecution(actor, id, request));
     }
 
+    @GetMapping("/subtasks/{id}/executions")
+    public ApiResponse<ExecutionHistoryPage> executions(@AuthenticationPrincipal CurrentUser actor, @PathVariable String id,
+                                                        @RequestParam(defaultValue = "1") int page,
+                                                        @RequestParam(defaultValue = "20") int pageSize) {
+        return ApiResponse.success(tasks.executions(actor, id, page, pageSize));
+    }
+
+    @GetMapping("/tasks/{id}/progress")
+    public ApiResponse<TaskProgress> progress(@AuthenticationPrincipal CurrentUser actor, @PathVariable String id) {
+        return ApiResponse.success(tasks.progress(actor, id));
+    }
+
     @PostMapping("/tasks/{id}/start")
     public ApiResponse<TaskDetail> start(@AuthenticationPrincipal CurrentUser actor, @PathVariable String id,
                                         @Valid @RequestBody StartTaskRequest request) {
         return ApiResponse.success(tasks.start(actor, id, request));
+    }
+
+    @PostMapping("/tasks/{id}/submit-acceptance")
+    public ApiResponse<TaskDetail> submitAcceptance(@AuthenticationPrincipal CurrentUser actor,@PathVariable String id,
+                                                   @Valid @RequestBody SubmitAcceptanceRequest request) {
+        return ApiResponse.success(tasks.submitAcceptance(actor,id,request));
+    }
+
+    @PostMapping("/tasks/{id}/complete")
+    public ApiResponse<TaskDetail> complete(@AuthenticationPrincipal CurrentUser actor,@PathVariable String id,
+                                           @Valid @RequestBody CompleteTaskRequest request) {
+        return ApiResponse.success(tasks.complete(actor,id,request));
     }
 }

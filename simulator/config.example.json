@@ -1,0 +1,19 @@
+{
+  "formatVersion": 1,
+  "baseUrl": "http://127.0.0.1:8080",
+  "count": 3,
+  "intervalSeconds": 5,
+  "cycles": 12,
+  "progressStep": 10,
+  "uploadEveryCycles": 4,
+  "repeatEveryCycles": 2,
+  "networkOutageCycles": [2, 3],
+  "completeUploads": true,
+  "pngPath": "examples/files/inspection-sample.png",
+  "stateDirectory": ".local/simulator/state",
+  "devices": [
+    {"deviceId": "REPLACE_DEVICE_UUID_1", "deviceToken": "REPLACE_PRIVATE_TOKEN_1", "executionId": "REPLACE_EXECUTION_UUID_1", "requirementId": "REPLACE_REQUIREMENT_UUID_1"},
+    {"deviceId": "REPLACE_DEVICE_UUID_2", "deviceToken": "REPLACE_PRIVATE_TOKEN_2", "executionId": "REPLACE_EXECUTION_UUID_2", "requirementId": "REPLACE_REQUIREMENT_UUID_2"},
+    {"deviceId": "REPLACE_DEVICE_UUID_3", "deviceToken": "REPLACE_PRIVATE_TOKEN_3", "executionId": "REPLACE_EXECUTION_UUID_3", "requirementId": "REPLACE_REQUIREMENT_UUID_3"}
+  ]
+}

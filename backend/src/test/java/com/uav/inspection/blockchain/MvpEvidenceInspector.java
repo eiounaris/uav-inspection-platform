@@ -215,13 +215,32 @@ public final class MvpEvidenceInspector {
         check(Set.of("+00:00","UTC").contains(text(session,"zone"))
                 &&"REPEATABLE-READ".equals(text(session,"isolation_level")),"database_snapshot_and_utc_session_verified");
         List<Map<String,Object>> migrations=query("SELECT version,checksum,success FROM flyway_schema_history ORDER BY installed_rank");
-        Map<String,Integer> expected=Map.of("1",-539134757,"2",1185045295,"3",-394507728,"4",-1021150431,
-                "5",-507899413,"6",186672578,"7",-763051633);
-        check(migrations.size()==expected.size(),"all_seven_existing_migrations_present");
+        Map<String,Integer> expected=Map.ofEntries(Map.entry("1",-539134757),Map.entry("2",1185045295),
+                Map.entry("3",-394507728),Map.entry("4",-1021150431),Map.entry("5",-507899413),
+                Map.entry("6",186672578),Map.entry("7",-763051633),Map.entry("8",1053255897),
+                Map.entry("9",72853277),Map.entry("10",-573715695),Map.entry("11",1029133993));
+        check(migrations.size()==expected.size(),"all_eleven_existing_migrations_present");
         for(Map<String,Object> migration:migrations) check(expected.containsKey(text(migration,"version"))
                 &&expected.get(text(migration,"version")).longValue()==number(migration,"checksum")
                 &&truth(migration.get("success")),"existing_migration_checksums_unchanged");
-        report.put("readOnlyDatabaseTransaction",true); report.put("migrationsValidated",7);
+        report.put("readOnlyDatabaseTransaction",true); report.put("migrationsValidated",expected.size());
+        report.put("accessGrantTableRows",count("SELECT COUNT(*) FROM access_grant"));
+        report.put("legacySixteenTableSnapshotUnchangedByAccessGrantTable",true);
+        List<Map<String,Object>> tasks=query("""
+                SELECT id,status,completed_at,
+                    (completed_at>=created_at AND completed_at<=UTC_TIMESTAMP(3)) AS completion_time_valid
+                FROM inspection_task ORDER BY id
+                """);
+        long completed=0;
+        for(Map<String,Object> task:tasks) {
+            boolean terminal="COMPLETED".equals(text(task,"status"));
+            check(terminal ? task.get("completed_at")!=null &&truth(task.get("completion_time_valid"))
+                    : task.get("completed_at")==null,"task_status_and_existing_completion_time_are_consistent");
+            if(terminal) completed++;
+        }
+        report.put("taskCompletionColumn",Map.of("presentSinceMigration",1,"includedInOriginalSixteenTableSnapshot",true,
+                "legacyColumnProjectionRequired",false,"inspectedTasks",tasks.size(),"completedTasks",completed,
+                "statusAndDatabaseTimeConsistent",true));
     }
 
     private void verifyDemoAccounts() throws Exception {

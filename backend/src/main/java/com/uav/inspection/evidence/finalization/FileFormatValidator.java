@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 import java.util.zip.CRC32;
@@ -18,6 +19,7 @@ import java.util.zip.CRC32;
 final class FileFormatValidator {
     private static final long MAX_IMAGE_PIXELS=25_000_000;
     private static final byte[] PNG={(byte)137,80,78,71,13,10,26,10};
+    private static final Set<String> PNG_CRITICAL=Set.of("IHDR","PLTE","IDAT","IEND");
     private static final Pattern PDF_END=Pattern.compile("startxref\\s+(\\d+)\\s+%%EOF\\s*\\z");
 
     void validate(Path file,String contentType) throws IOException {
@@ -49,6 +51,9 @@ final class FileFormatValidator {
                 byte[] type=input.readNBytes(4);
                 String name=new String(type,StandardCharsets.US_ASCII);
                 if(length>remaining-12 || !name.matches("[A-Za-z]{4}")) invalid();
+                // W3C PNG 13.1/13.5: an unknown critical chunk cannot be safely decoded.
+                // https://www.w3.org/TR/png/#13Decoders (unknown ancillary chunks may be ignored).
+                if((type[0]&0x20)==0 && !PNG_CRITICAL.contains(name)) invalid();
                 if(!header && (!"IHDR".equals(name) || length!=13)) invalid();
                 if(header && "IHDR".equals(name)) invalid();
                 if("IDAT".equals(name)) { if(dataEnded) invalid(); data=true; }
