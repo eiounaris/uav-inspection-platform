@@ -1,21 +1,23 @@
 package com.uav.inspection.evidence.finalization;
 
 import com.uav.inspection.common.error.BusinessException;
+import com.uav.inspection.common.lease.ProcessingLeaseKeeper;
+import com.uav.inspection.common.temp.TemporaryFileManager;
 import com.uav.inspection.evidence.finalization.FinalizationTransactions.Claim;
 import com.uav.inspection.evidence.finalization.FileFormatValidator.InvalidFile;
 import com.uav.inspection.evidence.storage.ObjectStorage;
 import com.uav.inspection.evidence.storage.UploadSettings;
 import com.uav.inspection.evidence.upload.persistence.UploadMapper.PartRow;
 import com.uav.inspection.messaging.MessageEvent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.uav.inspection.messaging.BusinessRecoveryDispatcher;
+import com.uav.inspection.messaging.DurableRecovery;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
@@ -23,82 +25,108 @@ import java.util.HexFormat;
 @Service
 @Profile("database & storage & messaging")
 public class FinalizationProcessor {
-    private static final Logger LOG=LoggerFactory.getLogger(FinalizationProcessor.class);
     private final FinalizationTransactions phases;
     private final ObjectStorage storage;
     private final UploadSettings settings;
+    private final ProcessingLeaseKeeper leases;
+    private final TemporaryFileManager temporaryFiles;
     private final FileFormatValidator formats=new FileFormatValidator();
 
     public FinalizationProcessor(FinalizationTransactions phases,ObjectStorage storage,UploadSettings settings) {
-        this.phases=phases; this.storage=storage; this.settings=settings;
+        this(phases,storage,settings,ProcessingLeaseKeeper.unmonitored());
     }
 
-    public void process(MessageEvent event) { process(event,false); }
+    public FinalizationProcessor(FinalizationTransactions phases,ObjectStorage storage,UploadSettings settings,
+                                 ProcessingLeaseKeeper leases) {
+        this(phases,storage,settings,leases,new TemporaryFileManager());
+    }
+
+    @Autowired
+    public FinalizationProcessor(FinalizationTransactions phases,ObjectStorage storage,UploadSettings settings,
+                                 ProcessingLeaseKeeper leases,TemporaryFileManager temporaryFiles) {
+        this.phases=phases; this.storage=storage; this.settings=settings; this.leases=leases;
+        this.temporaryFiles=temporaryFiles;
+    }
+
+    public void process(MessageEvent event) {
+        process(event,false);
+        phases.verifyAcknowledgement(event);
+    }
 
     /** Independent durable recovery deliberately bypasses consumed_event.DONE. */
     public void recoverDue() {
-        for(MessageEvent event:phases.due()) {
-            try { process(event,true); }
-            catch(RuntimeException failure) { LOG.warn("Finalization recovery failed: {}",failure.getClass().getSimpleName()); }
-        }
+        DurableRecovery.run(BusinessRecoveryDispatcher.Kind.FILE_FINALIZE,
+                phases::due,event->process(event,true));
     }
 
     private void process(MessageEvent event,boolean recovery) {
         Claim claim=phases.claim(event,recovery);
         if(claim==null) return;
-        Candidate candidate;
-        try {
-            candidate=storeCandidate(claim);
-        } catch(InvalidFile failure) {
-            phases.checkpoint(claim,true,failure.code()); return;
-        } catch(LocalSpaceUnavailable failure) {
-            phases.checkpoint(claim,false,"LOCAL_SPACE_UNAVAILABLE"); return;
-        } catch(BusinessException failure) {
-            phases.checkpoint(claim,false,"STORAGE_UNAVAILABLE"); return;
-        } catch(IOException failure) {
-            phases.checkpoint(claim,false,"FILE_IO_UNAVAILABLE"); return;
+        try(ProcessingLeaseKeeper.Lease lease=leases.track(()->phases.renew(claim))) {
+            lease.check();
+            TemporaryFileManager.Handle temporary=null;
+            try {
+                Candidate candidate;
+                try {
+                    temporary=temporaryFile(claim);
+                    candidate=storeCandidate(claim,temporary.path(),lease);
+                } catch(InvalidFile failure) {
+                    lease.check(); phases.checkpoint(claim,true,failure.code()); return;
+                } catch(LocalSpaceUnavailable failure) {
+                    lease.check(); phases.checkpoint(claim,false,"LOCAL_SPACE_UNAVAILABLE"); return;
+                } catch(BusinessException failure) {
+                    lease.check(); phases.checkpoint(claim,false,"STORAGE_UNAVAILABLE"); return;
+                } catch(IOException failure) {
+                    lease.check(); phases.checkpoint(claim,false,"FILE_IO_UNAVAILABLE"); return;
+                }
+                // Database failures escape; uncertain candidates remain available for reference-aware cleanup.
+                lease.check();
+                phases.finish(claim,candidate.objectKey(),claim.session().expectedSize(),candidate.digest());
+            } finally {
+                if(temporary!=null) temporary.close();
+            }
         }
-        // A database/commit failure must escape, even if represented as a BusinessException.
-        // Never delete this candidate when the commit result or lease ownership is uncertain.
-        phases.finish(claim,candidate.objectKey(),claim.session().expectedSize(),candidate.digest());
+    }
+
+    private TemporaryFileManager.Handle temporaryFile(Claim claim) throws IOException {
+        long usable=Files.getFileStore(settings.tempDirectory()).getUsableSpace();
+        if(usable<settings.minFreeSpace() || claim.session().expectedSize()>usable-settings.minFreeSpace())
+            throw new LocalSpaceUnavailable();
+        return temporaryFiles.create(settings.tempDirectory(),"finalize-",".tmp");
     }
 
     /** Only file and object-storage I/O belongs in the processor's retry classification. */
-    private Candidate storeCandidate(Claim claim) throws IOException {
-        Path temporary=null;
-        try {
-            if(Files.getFileStore(settings.tempDirectory()).getUsableSpace()
-                    <Math.addExact(claim.session().expectedSize(),settings.minFreeSpace())) {
-                throw new LocalSpaceUnavailable();
-            }
-            temporary=Files.createTempFile(settings.tempDirectory(),"finalize-",".tmp",
-                    PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
-            String digest=merge(claim,temporary);
-            formats.validate(temporary,claim.session().contentType());
-            String objectKey="evidence-files/"+claim.session().id()+"/"+claim.token();
-            storage.put(objectKey,temporary,claim.session().contentType());
-            return new Candidate(objectKey,digest);
-        } finally {
-            if(temporary!=null) {
-                try { Files.deleteIfExists(temporary); }
-                catch(IOException failure) { LOG.warn("Finalization temporary cleanup failed: {}",failure.getClass().getSimpleName()); }
-            }
-        }
+    private Candidate storeCandidate(Claim claim,Path temporary,ProcessingLeaseKeeper.Lease lease) throws IOException {
+        lease.check();
+        String digest=merge(claim,temporary,lease);
+        lease.check();
+        formats.validate(temporary,claim.session().contentType());
+        lease.check();
+        String objectKey="evidence-files/"+claim.session().id()+"/"+claim.token();
+        storage.put(objectKey,temporary,claim.session().contentType());
+        lease.check();
+        return new Candidate(objectKey,digest);
     }
 
-    private String merge(Claim claim,Path file) throws IOException {
+    private String merge(Claim claim,Path file,ProcessingLeaseKeeper.Lease lease) throws IOException {
         MessageDigest full=digest(); long total=0;
         if(claim.parts().size()!=claim.session().partCount()) throw new InvalidFile("PART_COUNT_MISMATCH");
         byte[] buffer=new byte[65536];
         try(var output=Files.newOutputStream(file)) {
             for(int i=0;i<claim.parts().size();i++) {
+                lease.check();
                 PartRow part=claim.parts().get(i);
                 long expected=Math.min(claim.session().partSize(),claim.session().expectedSize()-(long)i*claim.session().partSize());
                 if(part.partNo()!=i+1 || part.size()!=expected) throw new InvalidFile("PART_SIZE_MISMATCH");
                 MessageDigest partDigest=digest(); long size=0;
                 try(var input=storage.open(part.objectKey())) {
+                    lease.check();
                     int count;
-                    while((count=input.read(buffer))!=-1) {
+                    while(true) {
+                        lease.check();
+                        count=input.read(buffer);
+                        lease.check();
+                        if(count==-1) break;
                         if(count==0) continue;
                         size=Math.addExact(size,count);
                         if(size>part.size()) throw new InvalidFile("PART_SIZE_MISMATCH");

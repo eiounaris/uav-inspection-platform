@@ -7,6 +7,7 @@ import com.uav.inspection.evidence.upload.persistence.UploadMapper;
 import com.uav.inspection.evidence.upload.persistence.UploadMapper.*;
 import com.uav.inspection.messaging.MessageEvent;
 import com.uav.inspection.messaging.InvalidMessageException;
+import com.uav.inspection.messaging.RetryableDeliveryException;
 import com.uav.inspection.messaging.OutboxWriter;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -37,13 +38,37 @@ public class FinalizationTransactions {
         MessageEvent original=work.findEvent(event.eventId(),event.bizId());
         if (original==null || !original.equals(event)) throw new InvalidMessageException();
         Locked locked=lock(event.bizId());
-        if (locked==null) { work.done(event.eventId()); return null; }
-        if (!"VERIFYING".equals(locked.session().status())) { work.done(event.eventId()); return null; }
+        if (locked==null) throw new InvalidMessageException();
+        if (Set.of("COMPLETED","FAILED","EXPIRED").contains(locked.session().status())) {
+            work.done(event.eventId()); return null;
+        }
+        if (!"VERIFYING".equals(locked.session().status())) throw new InvalidMessageException();
         if (!recovery && "DONE".equals(work.consumption(event.eventId()))) return null;
         String token=UUID.randomUUID().toString();
         if (work.claim(event.bizId(),token)!=1) return null;
         work.processing(event.eventId());
         return new Claim(event,locked.session(),List.copyOf(uploads.listParts(event.bizId())),token);
+    }
+
+    /** Runs after the processor's final transaction has committed, including a concurrent lease winner. */
+    @Transactional
+    public void verifyAcknowledgement(MessageEvent event) {
+        Locked locked=lock(event.bizId());
+        if (locked==null) throw new InvalidMessageException();
+        if (!"DONE".equals(work.consumption(event.eventId()))) throw new RetryableDeliveryException();
+        String status=locked.session().status();
+        if ("COMPLETED".equals(status) && uploads.findVersionId(event.bizId())!=null) return;
+        if (Set.of("FAILED","EXPIRED").contains(status)) return;
+        WorkState state=work.state(event.bizId());
+        if ("VERIFYING".equals(status) && state!=null && state.leaseToken()==null && state.leaseUntil()==null
+                && state.nextActionAt()!=null) return;
+        throw new RetryableDeliveryException();
+    }
+
+    /** Renewal follows the same parent-to-session lock order and cannot revive an expired owner. */
+    @Transactional
+    public boolean renew(Claim claim) {
+        return owned(claim)!=null && work.renew(claim.session().id(),claim.token())==1;
     }
 
     @Transactional

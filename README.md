@@ -27,7 +27,13 @@
 - T019 提交验收与任务完成已完成：262 项后端测试、172 项数据库约束和 132 次真实 HTTP/968 项检查通过；7 个测试版本取得真实 Fabric 有效确认，任务完成条件、并发控制及终态保护均已验证。
 - T020 指定版本共享与受控下载已完成：311 项后端测试、206 项数据库约束和 123 次真实 HTTP/866 项检查通过；共享申请、审批、拒绝、撤销、到期及新旧版本权限隔离已验证，两个版本真实上链。
 - T021 任务审计及业务关系查询已完成：339 项后端测试、206 项数据库约束和 161 次真实 HTTP/1836 项检查通过；审计按真实资源归属分页，版本关联异常、复核、存证、共享与核验摘要，查询不写审计或调用外部服务。
-- **M3 业务补齐已通过**。下一项为 **T022：完善 Outbox、消费幂等及死信处理**，进入 M4 可靠性完善；完整 MVP 继续按任务清单推进。
+- T022 Outbox、消费幂等及死信处理已完成：384 项后端测试、220 项数据库约束和双 JVM 故障恢复验证通过；确认后崩溃复用原事件恢复，持久化检查点后才 ACK，坏消息先记录再进入死信。
+- T023 处理续租和业务扫描恢复已完成：425 项后端测试、220 项数据库约束及双 JVM 26 次业务 HTTP/272 项检查通过；真实文件读取超过原 120 秒租约仍可续租，重启后默认扫描恢复三个固定版本及真实存证。
+- T024 Fabric 未知态、失败重试与人工重新检查已完成：458 项后端测试、235 项数据库约束及 77 次真实 HTTP/599 项检查通过；人工申请按任务权限及请求编号幂等处理，原交易与确认请求可继续恢复，永久拒绝不能被强制覆盖。
+- T025 临时文件、分片及孤立对象清理已完成：508 项后端测试、248 项数据库约束及 30 次真实 HTTP/303 项检查通过；保护正式引用与有效租约，支持持久删除重试和跨 JVM 崩溃残留回收。最终 JAR 对原 M2 的 15 次 HTTP/111 项复查通过，无新增链登记。
+- T026 权限、状态与跨模块并发回归已完成：修复跨任务成员更新死锁，513 项测试、248 项数据库约束、8 轮/16 次成员更新及 183 次 HTTP/1322 项检查通过；最终 JAR 原 M2 复查通过，原数据及凭据保持。
+- T027 跨系统故障验收已完成：六个真实 JVM 崩溃窗口经过原租约自然到期后自动恢复，六个版本真实存证确认；原事件/交易、业务数据及凭据保持，最终 JAR 原 M2 复查通过。
+- **M1～M4 已通过**。下一项为 **T028：最小可用管理界面与联调**；M5 和完整 MVP 继续按任务清单完成。
 
 ## 项目文档
 
@@ -54,6 +60,12 @@
 | [T019 HTTP 示例](examples/t019.http) | 提交验收、确认完成、当前批次资格及 completedAt |
 | [T020 HTTP 示例](examples/t020.http) | 指定版本申请、审批、拒绝、撤销、可见版本分页及短期下载 |
 | [T021 HTTP 示例](examples/t021.http) | 按任务分页筛选审计，以及固定版本的业务关系摘要 |
+| [T022 HTTP 示例](examples/t022.http) | 完成接口的重试与轮询，以及双 JVM 消息故障验证入口 |
+| [T023 HTTP 示例](examples/t023.http) | 长 I/O 续租、过期 Worker 与应用重启后恢复的验证入口 |
+| [T024 HTTP 示例](examples/t024.http) | 人工重新检查的申请、幂等、权限及原交易恢复验证入口 |
+| [T025 HTTP 示例](examples/t025.http) | 清理验证入口，以及上传状态与任务审计的观察方法 |
+| [T026 HTTP 示例](examples/t026.http) | 权限、分页及跨模块并发回归入口和观察方法 |
+| [T027 HTTP 示例](examples/t027.http) | 跨 JVM 故障矩阵、恢复入口和原交易观察方法 |
 | [多机模拟器](simulator/README.md) | 3～5 台设备并行、断网重试、持久请求及上传阶段恢复 |
 | [通用续传客户端](simulator/upload.py) | 用户/设备文件上传、私有检查点、查询服务端缺片后继续上传 |
 | [M2 演示说明](docs/m2-demo.md) | 自动验收、保留结果复查和面试演示步骤 |
@@ -100,7 +112,7 @@ curl -i -H 'X-Trace-Id: demo-001' http://127.0.0.1:8080/api/v1/system/status
 python3 deploy/scripts/init-env.py
 ```
 
-Spring Boot 从进程环境读取 `SPRING_PROFILES_ACTIVE`、`SERVER_ADDRESS`、`SERVER_PORT`，默认 `local`、`127.0.0.1`、`8080`。它不会自动加载 `.env`，初始化脚本也不会启动服务或切换 JAVA_HOME。后端启动器显式读取 DB_*、S3_*、UPLOAD_*、VERIFICATION_*、RABBITMQ_*、MESSAGING_*、FABRIC_*、REDIS_*、DEVICE_*、JWT_SECRET；保留初始化生成的原凭据和 64 位小写十六进制密钥。对象存储在 T010 接入，T011 接入异步定版及消息，T012 通过 --ledger 显式启用真实业务存证，T015 接入设备认证与 Redis 在线状态缓存。
+Spring Boot 从进程环境读取 `SPRING_PROFILES_ACTIVE`、`SERVER_ADDRESS`、`SERVER_PORT`，默认 `local`、`127.0.0.1`、`8080`。它不会自动加载 `.env`，初始化脚本也不会启动服务或切换 JAVA_HOME。后端启动器显式读取 DB_*、S3_*、UPLOAD_*、VERIFICATION_*、CLEANUP_*、RABBITMQ_*、MESSAGING_*、FABRIC_*、REDIS_*、DEVICE_*、JWT_SECRET；保留初始化生成的原凭据和 64 位小写十六进制密钥。对象存储在 T010 接入，T011 接入异步定版及消息，T012 通过 --ledger 显式启用真实业务存证，T015 接入设备认证与 Redis 在线状态缓存。
 
 后端固定 Spring Boot 4.1.1，已完成构建、测试及打包启动验证；四个业务服务镜像已通过 T003 验证，Fabric 2.5.16 节点、CLI 和开发通道已通过 T004 验证。Gateway Java 1.13.0 已通过 T006；MyBatis Starter 4.0.0、Flyway 12.4.0 和 Connector/J 9.7.0 已通过 T007，具体状态见验证记录。
 
@@ -122,6 +134,10 @@ python3 deploy/scripts/run-backend.py --demo
 
 启动器读取本地 .env 的数据库、存储及 RabbitMQ 参数，开启 local,database,storage,messaging[,demo]。移除 --demo 只迁移结构、不插入演示账号。随机密码和设备令牌保存在 .local/demo-credentials.json（0600），不打印或提交；重复启动保留既有值。prod 组合由应用拒绝演示初始化。迁移、角色清单和验证方法见 [后端说明](backend/README.md)。
 
+T025 清理能力通过 `python3 deploy/scripts/run-backend.py --cleanup` 显式追加 `cleanup` profile；local、prod 的普通启动均不自动启用。默认保留 3600 秒宽限，每轮每类对象最多扫描 100 条、每 60 秒触发一次；配置项为 `CLEANUP_GRACE_SECONDS`、`CLEANUP_BATCH_SIZE`、`CLEANUP_SCAN_DELAY_MS`、`CLEANUP_SCHEDULER_ENABLED`。清理会重查正式文件和分片引用，保护仍可上传的会话及有效处理租约；临时文件使用跨 JVM 文件锁，重启后可回收超龄且无持有者的残留文件。配置与处理边界见 [后端说明](backend/README.md#临时文件分片及孤立对象清理t025)。
+
+独立清理探针入口为 `python3 deploy/scripts/verify-cleanup.py`，需先构建 `database-probe` 并停止其他项目后端和消息消费者。它使用真实 MySQL、Garage 和 RabbitMQ 及独占夹具，不启用 `ledger`，不新增 Fabric 登记；私有报告位于 `.local/cleanup-probe/`。实际验收结果以 [验证记录](docs/verification.md) 为准。
+
 ## 启用真实 Fabric 业务存证与文件核验
 
 启动下文 Fabric 网络及链码后，复用原数据库、RabbitMQ、Garage 和普通 User1 身份：
@@ -139,6 +155,12 @@ python3 deploy/scripts/run-backend.py --demo --ledger
 指定版本共享与受控下载见 [T020 示例](examples/t020.http)。共享只开放获批版本，批准要求复核通过且存证确认；下载地址最长 300 秒且不超过授权期限。使用 `python3 deploy/scripts/verify-sharing.py` 可验证真实审批、下载、到期与撤销边界。
 
 真实探针使用独立业务数据和消息拓扑，结束后清理自己的链外夹具；已提交的测试证据保留在原账本，不重建或清空链网络。
+
+消息可靠性验证使用 `python3 deploy/scripts/verify-messaging.py`。脚本在真实发布确认后、SENT 落库前结束第一 JVM，由第二 JVM 等待默认 120 秒发送租约自然到期后恢复，并检查重复消费、ACK 时机和死信。需先停止其他后端或业务探针；运行约 3～4 分钟，私有报告保存在 `.local/messaging-probe/`。复现步骤及边界见 [后端说明](backend/README.md)。
+
+处理租约及恢复扫描验证使用 `python3 deploy/scripts/verify-recovery.py`，沿用默认 120 秒业务租约、30 秒续租及 10 秒扫描间隔。它实际等待长文件读取超过原租约、旧租约自然到期，再用第二 JVM 的自动扫描恢复未完成业务及原 Fabric 交易。运行约 4～5 分钟，使用独占测试夹具，私有报告保存在 `.local/recovery-probe/`。
+
+Fabric 未知态与人工重新检查验证使用 `python3 deploy/scripts/verify-anchor-retries.py`。它通过正式接口检查任务权限、并发幂等及重新检查申请，调用业务处理器核对原确认请求或原交易恢复，并验证永久权限拒绝和真实账本摘要冲突。探针关闭自己的消息消费者及恢复定时入口，以控制故障边界；使用真实服务和独占夹具，报告保存在 `.local/anchor-retry-probe/`。
 
 ## 最小真实闭环演示
 

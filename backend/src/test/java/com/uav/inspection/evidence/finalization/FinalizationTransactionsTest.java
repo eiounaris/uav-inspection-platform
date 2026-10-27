@@ -8,6 +8,8 @@ import com.uav.inspection.evidence.upload.persistence.UploadMapper;
 import com.uav.inspection.evidence.upload.persistence.UploadMapper.*;
 import com.uav.inspection.messaging.MessageEvent;
 import com.uav.inspection.messaging.OutboxWriter;
+import com.uav.inspection.messaging.InvalidMessageException;
+import com.uav.inspection.messaging.RetryableDeliveryException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -165,5 +167,126 @@ class FinalizationTransactionsTest {
         when(work.checkpoint(eq(UPLOAD),eq(TOKEN),anyString(),any(),anyString())).thenReturn(0);
         assertThrows(IllegalStateException.class,()->transactions.checkpoint(claim,false,"STORAGE_UNAVAILABLE"));
         verify(work,never()).done(anyString());
+    }
+
+    @Test
+    void renewalUsesTheSameParentFirstLockOrderAndOnlyTheCurrentDatabaseOwner() {
+        when(work.renew(UPLOAD,TOKEN)).thenReturn(1);
+        assertTrue(transactions.renew(claim));
+        var order=inOrder(uploads,work);
+        order.verify(uploads).findSession(UPLOAD);
+        order.verify(uploads).lockTask("task");
+        order.verify(uploads).lockSubtask("subtask");
+        order.verify(uploads).lockRequirement("requirement");
+        order.verify(uploads).lockExecution("execution");
+        order.verify(uploads).lockSession(UPLOAD);
+        order.verify(work).state(UPLOAD);
+        order.verify(uploads).databaseNow();
+        order.verify(work).renew(UPLOAD,TOKEN);
+        verify(work,never()).processing(anyString());
+        verify(work,never()).done(anyString());
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void expiredReplacedOrTerminalLeasesCannotBeResurrectedByRenewal() {
+        for(WorkState state:List.of(new WorkState(TOKEN,NOW,0,null),
+                new WorkState(TOKEN,NOW.minusSeconds(1),0,null),
+                new WorkState("replacement",NOW.plusSeconds(120),0,null))) {
+            when(work.state(UPLOAD)).thenReturn(state);
+            assertFalse(transactions.renew(claim));
+        }
+        setSessionStatus("COMPLETED");
+        assertFalse(transactions.renew(claim));
+        verify(work,never()).renew(anyString(),anyString());
+        verify(work,never()).done(anyString());
+    }
+
+    @Test
+    void renewalStillChecksItsConditionalUpdateAfterTheOwnershipRead() {
+        when(work.renew(UPLOAD,TOKEN)).thenReturn(0);
+        assertFalse(transactions.renew(claim));
+        verify(work,never()).done(anyString());
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void processingOrMissingConsumerCheckpointsKeepTheBrokerDeliveryUnacknowledged() {
+        for(String status:new String[]{null,"PROCESSING"}) {
+            when(work.consumption(EVENT.eventId())).thenReturn(status);
+            assertThrows(RetryableDeliveryException.class,()->transactions.verifyAcknowledgement(EVENT));
+        }
+    }
+
+    @Test
+    void aDoneFlagWithAnActiveOrExpiredWorkerLeaseDoesNotProveRecoveryHandoff() {
+        when(work.consumption(EVENT.eventId())).thenReturn("DONE");
+        for(WorkState state:List.of(new WorkState(TOKEN,NOW.plusSeconds(120),0,null),
+                new WorkState(TOKEN,NOW.minusSeconds(1),0,NOW))) {
+            when(work.state(UPLOAD)).thenReturn(state);
+            assertThrows(RetryableDeliveryException.class,()->transactions.verifyAcknowledgement(EVENT));
+        }
+    }
+
+    @Test
+    void aDoneFlagWithoutAStoredRetryPlanCannotLoseTheOnlyBrokerDelivery() {
+        when(work.consumption(EVENT.eventId())).thenReturn("DONE");
+        when(work.state(UPLOAD)).thenReturn(new WorkState(null,null,1,null));
+        assertThrows(RetryableDeliveryException.class,()->transactions.verifyAcknowledgement(EVENT));
+    }
+
+    @Test
+    void committedRetryPlansCanBeAcknowledgedBeforeAndAfterTheirDueTime() {
+        when(work.consumption(EVENT.eventId())).thenReturn("DONE");
+        for(Instant due:List.of(NOW.plusSeconds(2),NOW.minusSeconds(1))) {
+            when(work.state(UPLOAD)).thenReturn(new WorkState(null,null,1,due));
+            assertDoesNotThrow(()->transactions.verifyAcknowledgement(EVENT));
+        }
+        verify(work,never()).done(anyString());
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void completedUploadsRequireTheirPersistedVersionBeforeAcknowledgement() {
+        setSessionStatus("COMPLETED");
+        when(work.consumption(EVENT.eventId())).thenReturn("DONE");
+        assertThrows(RetryableDeliveryException.class,()->transactions.verifyAcknowledgement(EVENT));
+        when(uploads.findVersionId(UPLOAD)).thenReturn("fixed-version");
+        assertDoesNotThrow(()->transactions.verifyAcknowledgement(EVENT));
+    }
+
+    @Test
+    void committedTerminalFailuresOrExpiryNeedNoExternalIoOrNewCheckpoint() {
+        when(work.consumption(EVENT.eventId())).thenReturn("DONE");
+        for(String status:List.of("FAILED","EXPIRED")) {
+            setSessionStatus(status);
+            assertDoesNotThrow(()->transactions.verifyAcknowledgement(EVENT));
+        }
+        verify(work,never()).state(anyString());
+        verify(work,never()).done(anyString());
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void anUnfrozenUploadIsAnInvalidDurableWorkItemRatherThanAnAcknowledgedResult() {
+        setSessionStatus("UPLOADING");
+        assertThrows(InvalidMessageException.class,()->transactions.claim(EVENT,false));
+        verify(work,never()).done(anyString());
+        verify(work,never()).processing(anyString());
+    }
+
+    @Test
+    void missingBusinessRowsNeverCreateAFictitiousDoneCheckpoint() {
+        when(uploads.findSession(UPLOAD)).thenReturn(null);
+        assertThrows(InvalidMessageException.class,()->transactions.claim(EVENT,false));
+        assertThrows(InvalidMessageException.class,()->transactions.verifyAcknowledgement(EVENT));
+        verify(work,never()).done(anyString());
+    }
+
+    private void setSessionStatus(String status) {
+        SessionRow row=new SessionRow(UPLOAD,"task","subtask","requirement","evidence","execution","org",
+                "USER","user","client","hash","image.png","image/png",12,1048576,1,status,NOW.plusSeconds(3600),0,NOW,NOW);
+        when(uploads.findSession(UPLOAD)).thenReturn(row);
+        when(uploads.lockSession(UPLOAD)).thenReturn(row);
     }
 }

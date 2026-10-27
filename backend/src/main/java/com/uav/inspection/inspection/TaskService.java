@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 
 @Service
@@ -158,24 +159,52 @@ public class TaskService {
     public TaskDetail replaceMembers(CurrentUser supplied, String taskId, ReplaceMembersRequest request) {
         validateId(taskId);
         TaskSummary task = requireTaskRow(tasks.lockTask(taskId));
-        CurrentUser actor = permissions.currentActor(supplied, true);
-        Role managerRole = OWNER.equals(actor.orgId()) ? Role.OWNER_TASK_ADMIN : Role.OPERATOR_TASK_ADMIN;
-        permissions.requireTask(actor, task.id(), task.ownerOrgId(), task.operatorOrgId(), managerRole);
-        requireVersion(task.lockVersion(), request.expectedLockVersion());
+        // Membership inserts also take FK locks on other users. Lock all involved accounts in one
+        // global order before taking the actor's usual write lock, even across different tasks.
+        CurrentUser initial = permissions.currentActor(supplied, false);
+        requireMemberManager(initial, task);
+        invalidIf(request == null);
         validateIds(request.userIds(), true);
+        List<String> managed = tasks.listMembers(task.id()).stream()
+                .filter(member -> initial.orgId().equals(member.orgId())).map(member -> member.userId()).toList();
+        Set<String> involved = new TreeSet<>(managed);
+        involved.add(initial.id());
         for (String userId : request.userIds()) {
             CandidateRow candidate = tasks.findCandidate(userId);
+            // This preview limits the lock set to the server-authenticated organization. It is
+            // not final candidate validation: enabled state and roles are re-read under the locks.
+            invalidIf(candidate == null || !initial.orgId().equals(candidate.orgId()));
+            involved.add(userId);
+        }
+        Map<String, CandidateRow> locked = new LinkedHashMap<>();
+        for (String userId : involved) locked.put(userId, tasks.lockCandidate(userId));
+        CurrentUser actor = permissions.currentActor(supplied, true);
+        requireMemberManager(actor, task);
+        invalidIf(!initial.orgId().equals(actor.orgId()));
+        requireVersion(task.lockVersion(), request.expectedLockVersion());
+        for (String userId : request.userIds()) {
+            CandidateRow candidate = locked.get(userId);
             invalidIf(candidate == null || !candidate.enabled() || !actor.orgId().equals(candidate.orgId()));
             List<Role> roles = parseRoles(candidate.rolesJson());
             invalidIf(OWNER.equals(actor.orgId()) ? !hasOwnerBusinessRole(roles) : !hasOperatorBusinessRole(roles));
         }
-        tasks.deleteManagedMembers(task.id(), actor.orgId(), task.createdBy());
-        for (String userId : request.userIds()) {
+        for (String userId : managed.stream().sorted().toList()) {
+            if (userId.equals(task.createdBy())) continue;
+            CandidateRow member = locked.get(userId);
+            invalidIf(member == null || !actor.orgId().equals(member.orgId()));
+            changed(tasks.deleteManagedMember(task.id(), userId, task.createdBy()));
+        }
+        for (String userId : request.userIds().stream().sorted().toList()) {
             addMember(task.id(), userId);
         }
         changed(tasks.touchTask(task.id(), task.lockVersion()));
         appendAudit(actor, "TASK_MEMBERS_UPDATED", "INSPECTION_TASK", task.id());
         return detail(requireTaskRow(tasks.findTask(task.id())));
+    }
+
+    private void requireMemberManager(CurrentUser actor, TaskSummary task) {
+        Role managerRole = OWNER.equals(actor.orgId()) ? Role.OWNER_TASK_ADMIN : Role.OPERATOR_TASK_ADMIN;
+        permissions.requireTask(actor, task.id(), task.ownerOrgId(), task.operatorOrgId(), managerRole);
     }
 
     @Transactional

@@ -3,6 +3,7 @@ package com.uav.inspection.evidence.upload;
 import com.uav.inspection.audit.persistence.AuditMapper;
 import com.uav.inspection.common.error.BusinessException;
 import com.uav.inspection.common.error.ErrorCode;
+import com.uav.inspection.common.temp.TemporaryFileManager;
 import com.uav.inspection.evidence.storage.ObjectStorage;
 import com.uav.inspection.evidence.storage.UploadSettings;
 import com.uav.inspection.evidence.upload.UploadModels.PartCommit;
@@ -40,6 +41,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -107,6 +110,27 @@ class UploadServiceTest {
             assertTrue(ImageIO.write(new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB), "png", output));
             image = output.toByteArray();
         }
+    }
+
+    @Test
+    void aCleanupPassCannotRemoveTheSpoolWhileItsDatabaseCommitIsInProgress() throws Exception {
+        prepareMockPhases();
+        AtomicReference<Path> spool=new AtomicReference<>();
+        doAnswer(call->{
+            Path file=call.getArgument(1);spool.set(file);
+            Files.setLastModifiedTime(file,FileTime.from(Instant.now().minusSeconds(7200)));
+            return null;
+        }).when(storage).put(anyString(),any(Path.class),eq("image/png"));
+        when(phases.storePart(eq(ACTOR),eq(UPLOAD),eq(1),eq((long)image.length),anyString(),anyString()))
+                .thenAnswer(call->{
+                    var sweep=new TemporaryFileManager().sweep(temporaryDirectory,Duration.ofSeconds(60),100);
+                    assertTrue(sweep.locked()>0);assertEquals(0,sweep.deleted());
+                    assertArrayEquals(image,Files.readAllBytes(spool.get()));
+                    return new PartCommit(result(call.getArgument(4)),call.getArgument(5));
+                });
+        var service=proxy(new UploadService(settings,storage,phases,new TemporaryFileManager()));
+        service.uploadPart(ACTOR,UPLOAD,1,body(),image.length);
+        assertFalse(Files.exists(spool.get()));assertTemporaryDirectoryEmpty();
     }
 
     @Test

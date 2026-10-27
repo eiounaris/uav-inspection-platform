@@ -8,12 +8,25 @@ import java.util.List;
 
 /** Byte checkpoints stay inside this persistence boundary and are never API DTOs. */
 public interface AnchorMapper {
+    int MAX_AUTOMATIC_FAILURES = 10;
     String SUBMISSION_COLUMNS="""
             s.id,s.version_id,s.status,s.confirmed_tx_id,s.confirmed_by,s.retryable,s.retry_count,
             s.next_action_at,s.lease_token,s.lease_until,s.last_error,s.created_at,s.updated_at,
             v.task_id,v.evidence_id,v.version_no,v.sha256,v.submitter_org_id
             """;
     String ATTEMPT_COLUMNS="id,submission_id,attempt_no,tx_id,phase,transaction_bytes,commit_bytes,validation_code,block_number,last_error,created_at,updated_at";
+    /** Only proven, retryable transaction conflicts consume this manual-dispatch cycle's budget. */
+    String AUTOMATIC_FAILURE_COUNT="""
+            (SELECT COUNT(*) FROM chain_attempt failure
+              WHERE failure.submission_id=s.id AND failure.phase='INVALID' AND failure.validation_code IN (11,12)
+                AND failure.attempt_no>COALESCE((
+                    SELECT request.baseline_attempt_no FROM anchor_retry_request request
+                    WHERE request.submission_id=s.id ORDER BY request.dispatch_no DESC LIMIT 1
+                ),0))
+            """;
+
+    @Select("SELECT "+AUTOMATIC_FAILURE_COUNT+" FROM chain_submission s WHERE s.id=#{id}")
+    int automaticFailureCount(@Param("id") String id);
 
     @Select("SELECT UTC_TIMESTAMP(3)")
     Instant now();
@@ -40,10 +53,20 @@ public interface AnchorMapper {
     MessageEvent event(@Param("eventId") String eventId,@Param("bizId") String bizId);
 
     @Select("""
+            SELECT event_id FROM outbox_event WHERE biz_id=#{id} AND event_type='EVIDENCE_ANCHOR_REQUESTED'
+            ORDER BY dispatch_no DESC LIMIT 1
+            """)
+    String latestEventId(@Param("id") String id);
+
+    @Select("""
             SELECT o.event_id,o.event_type,o.biz_id,JSON_UNQUOTE(JSON_EXTRACT(o.payload,'$.traceId')) AS trace_id
             FROM chain_submission s JOIN outbox_event o ON o.biz_id=s.id
-                AND o.event_type='EVIDENCE_ANCHOR_REQUESTED' AND o.dispatch_no=0
-            WHERE (s.status IN ('PENDING','SUBMITTED','UNKNOWN') OR (s.status='FAILED' AND s.retryable=TRUE AND s.retry_count<10))
+                AND o.event_type='EVIDENCE_ANCHOR_REQUESTED'
+                AND o.dispatch_no=(SELECT MAX(current_event.dispatch_no) FROM outbox_event current_event
+                    WHERE current_event.biz_id=s.id AND current_event.event_type='EVIDENCE_ANCHOR_REQUESTED')
+            WHERE (s.status IN ('PENDING','SUBMITTED','UNKNOWN') OR (s.status='FAILED' AND s.retryable=TRUE AND
+            """+AUTOMATIC_FAILURE_COUNT+" < "+MAX_AUTOMATIC_FAILURES+"""
+            ))
               AND (s.next_action_at IS NULL OR s.next_action_at<=UTC_TIMESTAMP(3))
               AND (s.lease_until IS NULL OR s.lease_until<=UTC_TIMESTAMP(3))
             ORDER BY s.updated_at,s.id LIMIT 10
@@ -60,13 +83,26 @@ public interface AnchorMapper {
     int consume(@Param("eventId") String eventId,@Param("status") String status);
 
     @Update("""
-            UPDATE chain_submission SET lease_token=#{token},lease_until=TIMESTAMPADD(SECOND,120,UTC_TIMESTAMP(3)),next_action_at=NULL
-            WHERE id=#{id} AND status<>'CONFIRMED'
-              AND (status<>'FAILED' OR (retryable=TRUE AND retry_count<10))
-              AND (lease_until IS NULL OR lease_until<=UTC_TIMESTAMP(3))
-              AND (next_action_at IS NULL OR next_action_at<=UTC_TIMESTAMP(3))
+            UPDATE chain_submission s SET s.lease_token=#{token},s.lease_until=TIMESTAMPADD(SECOND,120,UTC_TIMESTAMP(3)),
+                s.next_action_at=NULL,s.status=CASE WHEN s.status='FAILED' THEN 'PENDING' ELSE s.status END
+            WHERE s.id=#{id} AND (s.status IN ('PENDING','SUBMITTED','UNKNOWN')
+              OR (s.status='FAILED' AND s.retryable=TRUE AND
+            """+AUTOMATIC_FAILURE_COUNT+" < "+MAX_AUTOMATIC_FAILURES+"""
+            ))
+              AND (s.lease_until IS NULL OR s.lease_until<=UTC_TIMESTAMP(3))
+              AND (s.next_action_at IS NULL OR s.next_action_at<=UTC_TIMESTAMP(3))
             """)
     int claim(@Param("id") String id,@Param("token") String token);
+
+    @Update("""
+            UPDATE chain_submission s SET s.lease_until=TIMESTAMPADD(SECOND,120,UTC_TIMESTAMP(3))
+            WHERE s.id=#{id} AND s.lease_token=#{token} AND s.lease_until>UTC_TIMESTAMP(3)
+              AND (s.status IN ('PENDING','SUBMITTED','UNKNOWN')
+                   OR (s.status='FAILED' AND s.retryable=TRUE AND
+            """+AUTOMATIC_FAILURE_COUNT+" < "+MAX_AUTOMATIC_FAILURES+"""
+            ))
+            """)
+    int renew(@Param("id") String id,@Param("token") String token);
 
     @Insert("""
             INSERT INTO chain_attempt(id,submission_id,attempt_no,tx_id,phase,transaction_bytes)
@@ -110,7 +146,8 @@ public interface AnchorMapper {
                      @Param("unknown") boolean unknown,@Param("code") String code);
 
     @Update("""
-            UPDATE chain_submission SET status=#{status},retryable=#{retryable},retry_count=retry_count+1,
+            UPDATE chain_submission SET status=#{status},retryable=#{retryable},
+                retry_count=CASE WHEN retry_count<2147483647 THEN retry_count+1 ELSE retry_count END,
                 next_action_at=#{nextActionAt},last_error=#{code},lease_token=NULL,lease_until=NULL
             WHERE id=#{id} AND lease_token=#{token} AND lease_until>UTC_TIMESTAMP(3)
             """)

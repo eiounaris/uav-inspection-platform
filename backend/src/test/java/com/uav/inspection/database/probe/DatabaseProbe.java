@@ -1,11 +1,18 @@
 package com.uav.inspection.database.probe;
 
 import com.uav.inspection.UavInspectionApplication;
+import com.uav.inspection.blockchain.anchor.persistence.AnchorMapper;
+import com.uav.inspection.blockchain.anchor.AnchorTransactions;
+import com.uav.inspection.evidence.cleanup.CleanupSettings;
+import com.uav.inspection.evidence.cleanup.CleanupTransactions;
+import com.uav.inspection.evidence.cleanup.persistence.CleanupMapper;
+import com.uav.inspection.evidence.storage.ObjectInventory;
 import com.uav.inspection.common.persistence.UtcInstantTypeHandler;
 import com.uav.inspection.device.persistence.DroneMapper;
 import com.uav.inspection.identity.persistence.IdentityMapper;
 import com.uav.inspection.inspection.persistence.TaskMapper;
 import com.uav.inspection.messaging.persistence.OutboxMapper;
+import com.uav.inspection.messaging.persistence.MessageRejectionMapper;
 import org.apache.ibatis.type.JdbcType;
 import org.flywaydb.core.Flyway;
 import org.springframework.boot.WebApplicationType;
@@ -56,7 +63,10 @@ public final class DatabaseProbe {
     private static final String DRONE_CODE = "UAV-DEMO-001";
     private static final Instant FIXED_INSTANT = Instant.parse("2026-10-21T00:00:00.123Z");
     private static final LocalDateTime FIXED_UTC = LocalDateTime.parse("2026-10-21T00:00:00.123");
-    private static final String SNAPSHOT_DOMAIN = "T020-full-twenty-one-table-snapshot-v1";
+    private static final String SNAPSHOT_DOMAIN = "T025-full-twenty-four-table-snapshot-v1";
+    private static final String ORIGINAL_TWENTY_THREE_SNAPSHOT_DOMAIN = "T024-full-twenty-three-table-snapshot-v1";
+    private static final String ORIGINAL_TWENTY_TWO_SNAPSHOT_DOMAIN = "T022-full-twenty-two-table-snapshot-v1";
+    private static final String ORIGINAL_TWENTY_ONE_SNAPSHOT_DOMAIN = "T020-full-twenty-one-table-snapshot-v1";
     private static final String ORIGINAL_TWENTY_SNAPSHOT_DOMAIN = "T018-full-twenty-table-snapshot-v1";
     private static final String ORIGINAL_EIGHTEEN_SNAPSHOT_DOMAIN = "T016-full-eighteen-table-snapshot-v1";
     private static final String ORIGINAL_SEVENTEEN_SNAPSHOT_DOMAIN = "T015-full-seventeen-table-snapshot-v1";
@@ -95,6 +105,9 @@ public final class DatabaseProbe {
         TABLE_ORDER.put("issue", "id");
         TABLE_ORDER.put("review_record", "id");
         TABLE_ORDER.put("access_grant", "id");
+        TABLE_ORDER.put("message_rejection", "id");
+        TABLE_ORDER.put("anchor_retry_request", "id");
+        TABLE_ORDER.put("storage_cleanup_task", "id");
     }
 
     private final Map<String, Object> report = new LinkedHashMap<>();
@@ -179,7 +192,7 @@ public final class DatabaseProbe {
                             "inspection_subtask", "material_requirement", "task_execution",
                             "upload_session", "upload_part", "evidence_version", "chain_submission",
                             "outbox_event", "consumed_event", "chain_attempt", "verification_record", "device_event",
-                            "execution_adjustment", "issue", "review_record", "access_grant")
+                            "execution_adjustment", "issue", "review_record", "access_grant", "message_rejection", "anchor_retry_request", "storage_cleanup_task")
                     .stream().allMatch(table -> counts.get(table) == 0L));
             if (demoEnabled) {
                 report.put("stage", "demo_data_validation");
@@ -188,6 +201,12 @@ public final class DatabaseProbe {
             String before = snapshotDigest();
             report.put("businessSnapshotDomain", SNAPSHOT_DOMAIN);
             report.put("businessSnapshotSha256", before);
+            report.put("originalTwentyThreeSnapshotDomain", ORIGINAL_TWENTY_THREE_SNAPSHOT_DOMAIN);
+            report.put("originalTwentyThreeSnapshotSha256", snapshotDigest(ORIGINAL_TWENTY_THREE_SNAPSHOT_DOMAIN, 23));
+            report.put("originalTwentyTwoSnapshotDomain", ORIGINAL_TWENTY_TWO_SNAPSHOT_DOMAIN);
+            report.put("originalTwentyTwoSnapshotSha256", snapshotDigest(ORIGINAL_TWENTY_TWO_SNAPSHOT_DOMAIN, 22));
+            report.put("originalTwentyOneSnapshotDomain", ORIGINAL_TWENTY_ONE_SNAPSHOT_DOMAIN);
+            report.put("originalTwentyOneSnapshotSha256", snapshotDigest(ORIGINAL_TWENTY_ONE_SNAPSHOT_DOMAIN, 21));
             report.put("originalTwentySnapshotDomain", ORIGINAL_TWENTY_SNAPSHOT_DOMAIN);
             report.put("originalTwentySnapshotSha256", snapshotDigest(ORIGINAL_TWENTY_SNAPSHOT_DOMAIN, 20));
             report.put("originalEighteenSnapshotDomain", ORIGINAL_EIGHTEEN_SNAPSHOT_DOMAIN);
@@ -207,6 +226,12 @@ public final class DatabaseProbe {
                 verifyConstraints();
                 report.put("stage", "outbox_lease_transitions");
                 verifyOutboxLeaseTransitions(context.getBean(OutboxMapper.class));
+                report.put("stage", "message_rejection_round_trip");
+                verifyMessageRejectionRoundTrip(context.getBean(MessageRejectionMapper.class));
+                report.put("stage", "anchor_retry_budget_round_trip");
+                verifyAnchorRetryBudget(context.getBean(AnchorMapper.class));
+                report.put("stage", "storage_cleanup_lease_round_trip");
+                verifyStorageCleanupLease(context.getBean(CleanupMapper.class));
                 report.put("stage", "task_completion_transitions");
                 verifyTaskCompletionTransitions(context.getBean(TaskMapper.class));
                 report.put("stage", "utc_round_trip");
@@ -260,8 +285,11 @@ public final class DatabaseProbe {
                 Map.entry("5", "V5__finalization_outbox_and_submission.sql"), Map.entry("6", "V6__chain_attempts.sql"),
                 Map.entry("7", "V7__verification_records.sql"), Map.entry("8", "V8__device_reports.sql"),
                 Map.entry("9", "V9__execution_adjustments.sql"), Map.entry("10", "V10__issues_and_reviews.sql"),
-                Map.entry("11", "V11__version_access_grants.sql"));
-        require(entries.size() == expectedScripts.size(), "expected_successful_v1_through_v11_migrations");
+                Map.entry("11", "V11__version_access_grants.sql"),
+                Map.entry("12", "V12__durable_message_rejections.sql"),
+                Map.entry("13", "V13__anchor_retry_requests.sql"),
+                Map.entry("14", "V14__storage_cleanup_tasks.sql"));
+        require(entries.size() == expectedScripts.size(), "expected_successful_v1_through_v14_migrations");
         Map<String, Integer> checksums = new LinkedHashMap<>();
         for (var entry : entries) {
             Object version = entry.get("version");
@@ -283,7 +311,10 @@ public final class DatabaseProbe {
         report.put("flywayChecksum", checksums.get("1"));
         report.put("fullMigrationChecksums", checksums);
         require(Integer.valueOf(1029133993).equals(checksums.get("11")),"unexpected_v11_migration_checksum");
-        report.put("flyway", Map.of("version", "11", "successfulEntries", entries.size(),
+        require(Integer.valueOf(1723908793).equals(checksums.get("12")),"unexpected_v12_migration_checksum");
+        require(Integer.valueOf(-1202069766).equals(checksums.get("13")),"unexpected_v13_migration_checksum");
+        require(Integer.valueOf(-1562459282).equals(checksums.get("14")),"unexpected_v14_migration_checksum");
+        report.put("flyway", Map.of("version", "14", "successfulEntries", entries.size(),
                 "checksums", checksums, "validationPassed", true));
     }
 
@@ -429,6 +460,9 @@ public final class DatabaseProbe {
         verifyIssueAndReviewConstraints(checks, operatorUser, memberTask, validTask);
         verifyTaskCompletionConstraints(checks, memberTask, validTask);
         verifyAccessGrantConstraints(checks, operatorUser, memberTask, validTask);
+        verifyMessageRejectionConstraints(checks);
+        verifyAnchorRetryRequestConstraints(checks);
+        verifyStorageCleanupConstraints(checks);
         report.put("constraintCount", checks.size());
     }
 
@@ -1529,6 +1563,320 @@ public final class DatabaseProbe {
                 """,revoker,id)==1,"temporary_access_grant_not_revoked");
     }
 
+    private void verifyStorageCleanupConstraints(Map<String,Object> checks) {
+        String id=UUID.randomUUID().toString(),upload=UUID.randomUUID().toString();
+        String key="evidence-files/"+upload+"/"+UUID.randomUUID();
+        Runnable valid=()->insertCleanupTask(id,key,upload);
+        checks.put("duplicateCleanupObjectIdentity",expectConstraint("duplicate_cleanup_object_identity",1062,"23000",valid,()->
+                insertCleanupTask(UUID.randomUUID().toString(),key,upload)));
+        checks.put("malformedCleanupHash",expectConstraint("malformed_cleanup_hash",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET object_key_hash=? WHERE id=?","A".repeat(64),id)));
+        checks.put("malformedCleanupUploadId",expectConstraint("malformed_cleanup_upload_id",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET upload_id='NOT-A-UUID' WHERE id=?",id)));
+        checks.put("foreignCleanupNamespace",expectConstraint("foreign_cleanup_namespace",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET object_key='foreign/private/file' WHERE id=?",id)));
+        checks.put("cleanupUploadPrefixMismatch",expectConstraint("cleanup_upload_prefix_mismatch",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET upload_id=? WHERE id=?",UUID.randomUUID().toString(),id)));
+        checks.put("negativeCleanupObjectSize",expectConstraint("negative_cleanup_object_size",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET object_size=-1 WHERE id=?",id)));
+        checks.put("unknownCleanupStatus",expectConstraint("unknown_cleanup_status",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET status='DELETED' WHERE id=?",id)));
+        checks.put("negativeCleanupAttempts",expectConstraint("negative_cleanup_attempts",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET attempt_count=-1 WHERE id=?",id)));
+        checks.put("sendingCleanupWithoutLease",expectConstraint("sending_cleanup_without_lease",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET status='SENDING',next_action_at=NULL WHERE id=?",id)));
+        checks.put("pendingCleanupWithLease",expectConstraint("pending_cleanup_with_lease",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET lease_token=?,lease_until=UTC_TIMESTAMP(3) WHERE id=?",UUID.randomUUID().toString(),id)));
+        checks.put("pendingCleanupWithoutPlan",expectConstraint("pending_cleanup_without_plan",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET next_action_at=NULL WHERE id=?",id)));
+        checks.put("terminalCleanupWithPlan",expectConstraint("terminal_cleanup_with_plan",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET status='DONE' WHERE id=?",id)));
+        checks.put("unsafeCleanupError",expectConstraint("unsafe_cleanup_error",3819,"HY000",valid,()->
+                jdbc.update("UPDATE storage_cleanup_task SET last_error='private provider details' WHERE id=?",id)));
+    }
+
+    private void verifyStorageCleanupLease(CleanupMapper mapper) {
+        Map<String,Object> result=transactions.execute(transaction->{
+            transaction.setRollbackOnly();
+            String id=UUID.randomUUID().toString(),upload=UUID.randomUUID().toString();
+            String key="evidence-files/"+upload+"/"+UUID.randomUUID();insertCleanupTask(id,key,upload);
+            var phases=new CleanupTransactions(mapper,new CleanupSettings(new org.springframework.core.env.StandardEnvironment()));
+            var claim=phases.claim(id);
+            require(claim!=null && phases.verifyDeletion(claim,new ObjectInventory.Entry(key,mapper.now().minusSeconds(7200),0)),
+                    "old_server_namespace_orphan_without_upload_fk_must_be_claimable");
+            var wrong=new CleanupTransactions.Claim(claim.id(),claim.objectKey(),claim.uploadId(),UUID.randomUUID().toString(),claim.attemptCount(),claim.orgId());
+            require(!phases.done(wrong) && !phases.retry(wrong) && !phases.renew(wrong),
+                    "wrong_cleanup_owner_must_not_save_result_or_renew");
+            jdbc.update("UPDATE storage_cleanup_task SET lease_until=TIMESTAMPADD(SECOND,-1,UTC_TIMESTAMP(3)) WHERE id=?",id);
+            require(!phases.done(claim) && !phases.retry(claim) && !phases.renew(claim),
+                    "expired_cleanup_owner_must_not_save_result_or_renew");
+            var replacement=phases.claim(id);
+            require(replacement!=null && !replacement.token().equals(claim.token()) && !phases.done(claim),
+                    "cleanup_takeover_must_fence_original_token");
+            require(phases.retry(replacement) && phases.claim(id)==null,
+                    "cleanup_storage_failure_must_keep_original_identity_and_enforce_backoff");
+            jdbc.update("UPDATE storage_cleanup_task SET next_action_at=TIMESTAMPADD(SECOND,-1,UTC_TIMESTAMP(3)) WHERE id=?",id);
+            var resumed=phases.claim(id);
+            require(resumed!=null && phases.done(resumed),"current_cleanup_owner_must_finish_with_cleared_lease");
+            var complete=mapper.task(id);
+            require("DONE".equals(complete.status()) && complete.nextActionAt()==null && complete.leaseToken()==null && complete.leaseUntil()==null,
+                    "completed_cleanup_shape_must_be_terminal_and_lease_free");
+            require(phases.discover(new ObjectInventory.Entry(key,mapper.now().minusSeconds(7200),0))
+                            && "PENDING".equals(mapper.task(id).status()),
+                    "late_reappearing_orphan_must_rearm_same_durable_cleanup_identity");
+            String invalid=UUID.randomUUID().toString();insertCleanupTask(invalid,"evidence-files/"+upload+"/../private",upload);
+            require(phases.claim(invalid)==null && "INVALID_OBJECT_KEY".equals(mapper.task(invalid).lastError()),
+                    "prefix_shape_alone_must_not_authorize_noncanonical_cleanup_key");
+            String fresh=UUID.randomUUID().toString(),freshKey="evidence-files/"+upload+"/"+UUID.randomUUID();insertCleanupTask(fresh,freshKey,upload);
+            var freshClaim=phases.claim(fresh);
+            require(freshClaim!=null && !phases.verifyDeletion(freshClaim,new ObjectInventory.Entry(freshKey,mapper.now(),0))
+                            && "GRACE_PERIOD".equals(mapper.task(fresh).lastError()),
+                    "fresh_head_metadata_must_prevent_deleting_replaced_young_object");
+            return Map.of("missingUploadOrphanAccepted",true,"staleAndExpiredOwnersRejected",true,
+                    "leaseTakeoverFenced",true,"retryBackoffEnforced",true,"lateObjectReappearanceRecoverable",true,
+                    "noncanonicalKeysRejected",true,"freshHeadRespectsGrace",true,"rolledBack",true,
+                    "scope","Rollback-only cleanup protocol and clock fixtures; no S3 object was deleted.");
+        });
+        require(result!=null,"missing_storage_cleanup_lease_round_trip_result");report.put("storageCleanupLeaseRoundTrip",result);
+    }
+
+    private void insertCleanupTask(String id,String key,String upload) {
+        require(jdbc.update("""
+                INSERT INTO storage_cleanup_task(id,object_key,object_key_hash,upload_id,object_last_modified,object_size)
+                VALUES(?,?,?,?,TIMESTAMPADD(HOUR,-2,UTC_TIMESTAMP(3)),0)
+                """,id,key,sha256(key.getBytes(StandardCharsets.UTF_8)),upload)==1,"temporary_storage_cleanup_task_not_inserted");
+    }
+
+    private void verifyAnchorRetryRequestConstraints(Map<String,Object> checks) {
+        RetryFixture f=retryFixture();
+        String event=UUID.randomUUID().toString(),request=UUID.randomUUID().toString(),client=UUID.randomUUID().toString();
+        Runnable valid=()->{
+            f.setup().run(); insertAnchorOutboxEvent(event,f.submissionId(),1);
+            insertAnchorRetryRequest(request,f.submissionId(),f.actorId(),client,1,0,event);
+        };
+        checks.put("duplicateAnchorRetryClientKey",expectConstraint("duplicate_anchor_retry_client_key",1062,"23000",valid,()->{
+            String other=UUID.randomUUID().toString();insertAnchorOutboxEvent(other,f.submissionId(),2);
+            insertAnchorRetryRequest(UUID.randomUUID().toString(),f.submissionId(),f.actorId(),client,2,0,other);
+        }));
+        checks.put("duplicateAnchorRetryDispatch",expectConstraint("duplicate_anchor_retry_dispatch",1062,"23000",valid,()->{
+            String other=UUID.randomUUID().toString();insertAnchorOutboxEvent(other,f.submissionId(),2);
+            insertAnchorRetryRequest(UUID.randomUUID().toString(),f.submissionId(),f.actorId(),UUID.randomUUID().toString(),1,0,other);
+        }));
+        checks.put("duplicateAnchorRetryEvent",expectConstraint("duplicate_anchor_retry_event",1062,"23000",valid,()->
+                insertAnchorRetryRequest(UUID.randomUUID().toString(),f.submissionId(),f.actorId(),UUID.randomUUID().toString(),2,0,event)));
+        checks.put("invalidAnchorRetryClientId",expectConstraint("invalid_anchor_retry_client_id",3819,"HY000",valid,()->
+                jdbc.update("UPDATE anchor_retry_request SET client_request_id='not-a-request-uuid' WHERE id=?",request)));
+        checks.put("invalidAnchorRetryRequestHash",expectConstraint("invalid_anchor_retry_request_hash",3819,"HY000",valid,()->
+                jdbc.update("UPDATE anchor_retry_request SET request_hash=? WHERE id=?","A".repeat(64),request)));
+        checks.put("blankAnchorRetryReason",expectConstraint("blank_anchor_retry_reason",3819,"HY000",valid,()->
+                jdbc.update("UPDATE anchor_retry_request SET reason=' \t\n' WHERE id=?",request)));
+        checks.put("oversizedAnchorRetryReason",expectConstraint("oversized_anchor_retry_reason",1406,"22001",valid,()->
+                jdbc.update("UPDATE anchor_retry_request SET reason=? WHERE id=?","理".repeat(1001),request)));
+        checks.put("zeroAnchorRetryDispatch",expectConstraint("zero_anchor_retry_dispatch",3819,"HY000",valid,()->
+                jdbc.update("UPDATE anchor_retry_request SET dispatch_no=0 WHERE id=?",request)));
+        checks.put("negativeAnchorRetryBaseline",expectConstraint("negative_anchor_retry_baseline",3819,"HY000",valid,()->
+                jdbc.update("UPDATE anchor_retry_request SET baseline_attempt_no=-1 WHERE id=?",request)));
+        checks.put("danglingAnchorRetrySubmission",expectConstraint("dangling_anchor_retry_submission",1452,"23000",valid,()->
+                jdbc.update("UPDATE anchor_retry_request SET submission_id=? WHERE id=?",UUID.randomUUID().toString(),request)));
+        checks.put("danglingAnchorRetryRequester",expectConstraint("dangling_anchor_retry_requester",1452,"23000",valid,()->
+                jdbc.update("UPDATE anchor_retry_request SET requested_by=? WHERE id=?",UUID.randomUUID().toString(),request)));
+        checks.put("danglingAnchorRetryEvent",expectConstraint("dangling_anchor_retry_event",1452,"23000",valid,()->
+                jdbc.update("UPDATE anchor_retry_request SET event_id=? WHERE id=?",UUID.randomUUID().toString(),request)));
+        checks.put("restrictRetrySubmissionDeletion",expectConstraint("restrict_retry_submission_deletion",1451,"23000",valid,()->
+                jdbc.update("DELETE FROM chain_submission WHERE id=?",f.submissionId())));
+        checks.put("restrictRetryRequesterDeletion",expectConstraint("restrict_retry_requester_deletion",1451,"23000",valid,()->
+                jdbc.update("DELETE FROM app_user WHERE id=?",f.actorId())));
+        checks.put("restrictRetryEventDeletion",expectConstraint("restrict_retry_event_deletion",1451,"23000",valid,()->
+                jdbc.update("DELETE FROM outbox_event WHERE event_id=?",event)));
+    }
+
+    private void verifyAnchorRetryBudget(AnchorMapper mapper) {
+        Map<String,Object> result=transactions.execute(transaction->{
+            transaction.setRollbackOnly();RetryFixture f=retryFixture();f.setup().run();
+            String id=f.submissionId(),token=UUID.randomUUID().toString();
+            jdbc.update("UPDATE chain_submission SET status='UNKNOWN',retry_count=100,next_action_at=UTC_TIMESTAMP(3) WHERE id=?",id);
+            require(mapper.automaticFailureCount(id)==0 && mapper.claim(id,token)==1 && mapper.renew(id,token)==1,
+                    "unknown_reconciliations_must_not_exhaust_definitive_failure_budget");
+            require(mapper.checkpoint(id,token,"UNKNOWN",true,mapper.now(),"LEDGER_QUERY_UNAVAILABLE")==1,
+                    "unknown_lease_free_recovery_plan_not_saved");
+            for(int n=1;n<=9;n++) insertSyntheticInvalidAttempt(id,n,n%2==0?12:11);
+            jdbc.update("UPDATE chain_submission SET status='FAILED',retryable=TRUE,next_action_at=UTC_TIMESTAMP(3) WHERE id=?",id);
+            var phases=new AnchorTransactions(mapper);
+            var due=mapper.due().stream().filter(e->id.equals(e.bizId())).findFirst().orElseThrow();
+            var tenthOwner=phases.claim(due,true);
+            require(tenthOwner!=null && "PENDING".equals(mapper.find(id).status()),
+                    "ninth_definite_failure_must_allow_current_owner_to_start_next_attempt");
+            insertSyntheticInvalidAttempt(id,10,12);
+            require(phases.renew(tenthOwner) && phases.checkpoint(tenthOwner,mapper.latest(id),"FAILED",true,"COMMIT_CONFLICT",false)
+                            && mapper.find(id).nextActionAt()==null && "DONE".equals(mapper.consumption(due.eventId())),
+                    "tenth_definite_failure_owner_must_commit_done_and_stop_without_losing_its_lease");
+            report.put("tenthDefiniteConflictCheckpointVerified",true);
+            require(mapper.automaticFailureCount(id)==10 && mapper.due().stream().noneMatch(e->id.equals(e.bizId()))
+                            && mapper.claim(id,UUID.randomUUID().toString())==0,
+                    "ten_definite_conflicts_must_stop_automatic_claim_and_scan");
+            String request=UUID.randomUUID().toString(),event=UUID.randomUUID().toString();
+            insertAnchorOutboxEvent(event,id,1);
+            insertAnchorRetryRequest(request,id,f.actorId(),UUID.randomUUID().toString(),1,10,event);
+            jdbc.update("UPDATE anchor_retry_request SET reason=? WHERE id=?","理".repeat(1000),request);
+            require(mapper.automaticFailureCount(id)==0 && mapper.due().stream()
+                            .anyMatch(e->id.equals(e.bizId()) && event.equals(e.eventId())),
+                    "manual_baseline_must_preserve_old_attempts_and_select_latest_dispatch");
+            token=UUID.randomUUID().toString();
+            require(mapper.claim(id,token)==1 && "PENDING".equals(mapper.find(id).status()),
+                    "new_cycle_must_claim_failed_work_without_old_total_checkpoint_cap");
+            insertSyntheticInvalidAttempt(id,11,11);
+            require(mapper.automaticFailureCount(id)==1 && mapper.renew(id,token)==1,
+                    "current_cycle_counts_only_new_definite_conflicts");
+            require(mapper.checkpoint(id,token,"FAILED",true,mapper.now(),"COMMIT_CONFLICT")==1,
+                    "new_cycle_conflict_must_have_durable_next_action");
+            insertSyntheticInvalidAttempt(id,12,25);
+            require(mapper.automaticFailureCount(id)==1,"non_allowlisted_invalid_result_consumed_retry_budget");
+            jdbc.update("UPDATE chain_submission SET status='FAILED',retryable=FALSE,next_action_at=NULL WHERE id=?",id);
+            require(mapper.claim(id,UUID.randomUUID().toString())==0 && mapper.due().stream().noneMatch(e->id.equals(e.bizId())),
+                    "permanent_failure_must_not_be_automatically_claimed");
+            jdbc.update("UPDATE chain_submission SET status='UNKNOWN',retryable=TRUE,retry_count=2147483647,next_action_at=NULL WHERE id=?",id);
+            token=UUID.randomUUID().toString();
+            require(mapper.claim(id,token)==1 && mapper.checkpoint(id,token,"UNKNOWN",true,mapper.now(),"LEDGER_QUERY_UNAVAILABLE")==1
+                            && mapper.find(id).retryCount()==Integer.MAX_VALUE,
+                    "unknown_checkpoint_counter_must_saturate_without_stopping_recovery");
+            require(Long.valueOf(12).equals(jdbc.queryForObject("SELECT COUNT(*) FROM chain_attempt WHERE submission_id=?",Long.class,id)),
+                    "manual_cycle_must_not_delete_or_renumber_old_attempts");
+            require(Long.valueOf(1).equals(jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM anchor_retry_request WHERE id=? AND CHAR_LENGTH(reason)=1000
+                      AND created_at<=UTC_TIMESTAMP(3) AND created_at>=TIMESTAMPADD(MINUTE,-1,UTC_TIMESTAMP(3))
+                    """,Long.class,request)),"retry_reason_or_database_utc_default_not_preserved");
+            return Map.of("unknownDoesNotConsumeFailureBudget",true,"tenDefiniteConflictsStopNewClaims",true,
+                    "manualBaselineStartsNewBoundedCycle",true,"latestDispatchSelected",true,
+                    "allOldAttemptsRetained",true,"permanentFailuresExcluded",true,
+                    "unknownCounterSaturates",true,"maximumUnicodeReasonAndDatabaseUtcVerified",true,
+                    "rolledBack",true,"scope","Synthetic rollback-only SQL transaction outcomes and checkpoint bytes; no Fabric receipt or business permission is claimed.");
+        });
+        require(result!=null,"missing_anchor_retry_budget_round_trip_result");report.put("anchorRetryBudgetRoundTrip",result);
+    }
+
+    private RetryFixture retryFixture() {
+        String task=UUID.randomUUID().toString(),subtask=UUID.randomUUID().toString(),requirement=UUID.randomUUID().toString();
+        String evidence=UUID.randomUUID().toString(),execution=UUID.randomUUID().toString(),upload=UUID.randomUUID().toString();
+        String version=UUID.randomUUID().toString(),submission=UUID.randomUUID().toString(),actor=UUID.randomUUID().toString();
+        Runnable setup=()->{
+            insertTask(task,users.get("owner-admin").id(),OWNER,OPERATOR,0);insertSubtask(subtask,task);
+            insertRequirement(requirement,evidence,task,subtask,1);insertExecution(execution,subtask,"RUNNING",0,FIXED_UTC,null);
+            insertUploadSession(upload,task,subtask,requirement,evidence,execution,users.get("operator-user").id(),UUID.randomUUID().toString());
+            insertEvidenceVersion(version,upload,task,subtask,requirement,evidence,execution,users.get("operator-user").id(),null,1);
+            insertChainSubmission(submission,version);insertAnchorOutboxEvent(UUID.randomUUID().toString(),submission,0);
+            require(jdbc.update("""
+                    INSERT INTO app_user(id,org_id,username,password_hash,roles)
+                    SELECT ?,org_id,?,password_hash,roles FROM app_user WHERE id=?
+                    """,actor,"T024-rollback-"+actor,users.get("operator-admin").id())==1,"temporary_retry_requester_not_inserted");
+        };
+        return new RetryFixture(submission,actor,setup);
+    }
+
+    private void insertAnchorOutboxEvent(String event,String submission,int dispatch) {
+        require(jdbc.update("""
+                INSERT INTO outbox_event(event_id,event_type,biz_id,dispatch_no,payload)
+                VALUES(?,'EVIDENCE_ANCHOR_REQUESTED',?,?,JSON_OBJECT('eventId',?,'eventType','EVIDENCE_ANCHOR_REQUESTED',
+                    'bizId',?,'traceId','T024-rollback-probe'))
+                """,event,submission,dispatch,event,submission)==1,"temporary_anchor_dispatch_not_inserted");
+    }
+
+    private void insertAnchorRetryRequest(String id,String submission,String actor,String client,int dispatch,int baseline,String event) {
+        require(jdbc.update("""
+                INSERT INTO anchor_retry_request(id,submission_id,requested_by,client_request_id,request_hash,
+                    reason,dispatch_no,baseline_attempt_no,event_id)
+                VALUES(?,?,?,?,?,'重新检查原交易',?,?,?)
+                """,id,submission,actor,client,"a".repeat(64),dispatch,baseline,event)==1,"temporary_anchor_retry_request_not_inserted");
+    }
+
+    private void insertSyntheticInvalidAttempt(String submission,int number,int code) {
+        String id=UUID.randomUUID().toString();
+        insertChainAttempt(id,submission,number,sha256(id.getBytes(StandardCharsets.UTF_8)),new byte[]{1,2,3});
+        require(jdbc.update("UPDATE chain_attempt SET phase='INVALID',validation_code=?,block_number=42 WHERE id=?",code,id)==1,
+                "synthetic_rollback_invalid_outcome_not_saved");
+    }
+
+    private record RetryFixture(String submissionId,String actorId,Runnable setup) {}
+
+    private void verifyMessageRejectionConstraints(Map<String,Object> checks) {
+        String event = UUID.randomUUID().toString();
+        Runnable outbox = () -> insertOutboxEvent(event, UUID.randomUUID().toString());
+        checks.put("invalidOutboxStatus", expectConstraint("invalid_outbox_status",3819,"HY000",outbox,
+                () -> jdbc.update("UPDATE outbox_event SET status='DROPPED' WHERE event_id=?",event)));
+        checks.put("failedOutboxRequiresReason", expectConstraint("failed_outbox_requires_reason",3819,"HY000",outbox,
+                () -> jdbc.update("UPDATE outbox_event SET status='FAILED' WHERE event_id=?",event)));
+        checks.put("failedOutboxRequiresPermanentReason", expectConstraint("failed_outbox_requires_permanent_reason",3819,"HY000",outbox,
+                () -> jdbc.update("UPDATE outbox_event SET status='FAILED',last_error='PUBLISH_NACK' WHERE event_id=?",event)));
+        checks.put("failedOutboxCannotHaveLease", expectConstraint("failed_outbox_cannot_have_lease",3819,"HY000",outbox,
+                () -> jdbc.update("""
+                        UPDATE outbox_event SET status='FAILED',last_error='INVALID_ENVELOPE',
+                            lease_token=?,lease_until=UTC_TIMESTAMP(3) WHERE event_id=?
+                        """,UUID.randomUUID().toString(),event)));
+        checks.put("failedOutboxCannotHaveSentTime", expectConstraint("failed_outbox_cannot_have_sent_time",3819,"HY000",outbox,
+                () -> jdbc.update("""
+                        UPDATE outbox_event SET status='FAILED',last_error='INVALID_ENVELOPE',sent_at=UTC_TIMESTAMP(3)
+                        WHERE event_id=?
+                        """,event)));
+        String id = UUID.randomUUID().toString();
+        String hash = sha256(id.getBytes(StandardCharsets.UTF_8));
+        Runnable rejection = () -> insertMessageRejection(id,"FILE_FINALIZE",hash,0,"INVALID_ENVELOPE",null);
+        checks.put("duplicateConsumerRejectedBody", expectConstraint("duplicate_consumer_rejected_body",1062,"23000",rejection,
+                () -> insertMessageRejection(UUID.randomUUID().toString(),"FILE_FINALIZE",hash,3,"UNKNOWN_EVENT",null)));
+        checks.put("invalidRejectionConsumer", expectConstraint("invalid_rejection_consumer",3819,"HY000",rejection,
+                () -> jdbc.update("UPDATE message_rejection SET consumer_code='OTHER_CONSUMER' WHERE id=?",id)));
+        checks.put("invalidRejectionHash", expectConstraint("invalid_rejection_hash",3819,"HY000",rejection,
+                () -> jdbc.update("UPDATE message_rejection SET body_sha256=? WHERE id=?","g".repeat(64),id)));
+        checks.put("nonCanonicalRejectionHash", expectConstraint("non_canonical_rejection_hash",3819,"HY000",rejection,
+                () -> jdbc.update("UPDATE message_rejection SET body_sha256=? WHERE id=?","A".repeat(64),id)));
+        checks.put("negativeRejectionBodySize", expectConstraint("negative_rejection_body_size",3819,"HY000",rejection,
+                () -> jdbc.update("UPDATE message_rejection SET body_size=-1 WHERE id=?",id)));
+        checks.put("rejectionSizeBeyondByteArray", expectConstraint("rejection_size_beyond_byte_array",3819,"HY000",rejection,
+                () -> jdbc.update("UPDATE message_rejection SET body_size=2147483648 WHERE id=?",id)));
+        checks.put("invalidRejectionReason", expectConstraint("invalid_rejection_reason",3819,"HY000",rejection,
+                () -> jdbc.update("UPDATE message_rejection SET reason_code='UNSAFE_PROVIDER_ERROR' WHERE id=?",id)));
+        checks.put("invalidRejectionMessageIdentity", expectConstraint("invalid_rejection_message_identity",3819,"HY000",rejection,
+                () -> jdbc.update("UPDATE message_rejection SET message_id='not-a-canonical-uuid' WHERE id=?",id)));
+        checks.put("nonCanonicalRejectionMessageIdentity", expectConstraint("non_canonical_rejection_message_identity",3819,"HY000",rejection,
+                () -> jdbc.update("UPDATE message_rejection SET message_id='AAAAAAAA-0000-4000-8000-000000000001' WHERE id=?",id)));
+    }
+
+    private void insertMessageRejection(String id,String consumer,String hash,long size,String reason,String messageId) {
+        require(jdbc.update("""
+                INSERT INTO message_rejection(id,consumer_code,body_sha256,body_size,reason_code,message_id,created_at)
+                VALUES(?,?,?,?,?,?,UTC_TIMESTAMP(3))
+                """,id,consumer,hash,size,reason,messageId)==1,"temporary_message_rejection_not_inserted");
+    }
+
+    private void verifyMessageRejectionRoundTrip(MessageRejectionMapper mapper) {
+        Map<String,Object> result = transactions.execute(transaction -> {
+            transaction.setRollbackOnly();
+            String id=UUID.randomUUID().toString(), hash=sha256(id.getBytes(StandardCharsets.UTF_8));
+            String messageId=UUID.randomUUID().toString();
+            mapper.insertFirst(id,"FILE_FINALIZE",hash,0,"INVALID_ENVELOPE",null);
+            LocalDateTime first=jdbc.queryForObject("SELECT created_at FROM message_rejection WHERE id=?",LocalDateTime.class,id);
+            mapper.insertFirst(UUID.randomUUID().toString(),"FILE_FINALIZE",hash,4097,"MESSAGE_ID_MISMATCH",messageId);
+            var row=jdbc.queryForMap("SELECT id,body_size,reason_code,message_id,created_at FROM message_rejection WHERE id=?",id);
+            require(id.equals(row.get("id")) && ((Number)row.get("body_size")).longValue()==0
+                            && "INVALID_ENVELOPE".equals(row.get("reason_code")) && row.get("message_id")==null
+                            && first.equals(jdbc.queryForObject("SELECT created_at FROM message_rejection WHERE id=?",LocalDateTime.class,id)),
+                    "duplicate_rejection_changed_first_metadata");
+            String other=UUID.randomUUID().toString();
+            mapper.insertFirst(other,"EVIDENCE_ANCHOR",hash,2147483647L,"UNKNOWN_EVENT",messageId);
+            require(Long.valueOf(2).equals(jdbc.queryForObject("SELECT COUNT(*) FROM message_rejection WHERE body_sha256=?",Long.class,hash)),
+                    "rejection_body_not_independent_between_consumers");
+            require(Long.valueOf(2).equals(jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM message_rejection WHERE body_sha256=?
+                        AND created_at<=UTC_TIMESTAMP(3) AND created_at>=TIMESTAMPADD(MINUTE,-1,UTC_TIMESTAMP(3))
+                    """,Long.class,hash)),"rejection_timestamp_not_database_utc");
+            require(messageId.equals(jdbc.queryForObject("SELECT message_id FROM message_rejection WHERE id=?",String.class,other)),
+                    "canonical_rejection_message_identity_not_preserved");
+            return Map.of("duplicateBodyRetainsFirstMetadata",true,"consumerScopeIndependent",true,
+                    "zeroAndMaximumByteArraySizesAccepted",true,"canonicalOrNullMessageIdentityPreserved",true,
+                    "databaseUtcMillisecondsVerified",true,"rolledBack",true);
+        });
+        require(result!=null,"missing_message_rejection_round_trip_result");
+        report.put("messageRejectionRoundTrip",result);
+    }
+
     private void verifyOutboxLeaseTransitions(OutboxMapper mapper) {
         Map<String, Object> result = transactions.execute(transaction -> {
             transaction.setRollbackOnly();
@@ -1539,6 +1887,7 @@ public final class DatabaseProbe {
             require(mapper.claim(id, token) == 1, "outbox_initial_lease_not_claimed");
             require(mapper.sent(id, stale) == 0, "outbox_stale_token_marked_sent");
             require(mapper.retry(id, stale, "PUBLISH_NACK", 2) == 0, "outbox_stale_token_scheduled_retry");
+            require(mapper.failed(id, stale, "INVALID_ENVELOPE") == 0, "outbox_stale_token_marked_failed");
             require("SENDING".equals(jdbc.queryForObject("SELECT status FROM outbox_event WHERE event_id = ?",
                     String.class, id)), "outbox_stale_owner_changed_status");
             require(jdbc.update("""
@@ -1547,6 +1896,7 @@ public final class DatabaseProbe {
                     """, id) == 1, "outbox_probe_lease_not_expired");
             require(mapper.sent(id, token) == 0, "outbox_expired_owner_marked_sent");
             require(mapper.retry(id, token, "PUBLISH_NACK", 2) == 0, "outbox_expired_owner_scheduled_retry");
+            require(mapper.failed(id, token, "INVALID_ENVELOPE") == 0, "outbox_expired_owner_marked_failed");
             require(jdbc.update("""
                     UPDATE outbox_event SET lease_until = TIMESTAMPADD(SECOND,30,UTC_TIMESTAMP(3))
                     WHERE event_id = ?
@@ -1562,6 +1912,9 @@ public final class DatabaseProbe {
                             && "PUBLISH_NACK".equals(retry.get("last_error")) && booleanValue(retry.get("deferred")),
                     "outbox_retry_checkpoint_shape_invalid");
             String replacement = UUID.randomUUID().toString();
+            require(mapper.claim(id, replacement) == 0, "outbox_retry_backoff_was_bypassed");
+            require(jdbc.update("UPDATE outbox_event SET next_send_at=TIMESTAMPADD(SECOND,-1,UTC_TIMESTAMP(3)) WHERE event_id=?",id)==1,
+                    "outbox_probe_retry_not_made_due");
             require(mapper.claim(id, replacement) == 1, "outbox_replacement_lease_not_claimed");
             require(mapper.sent(id, token) == 0, "outbox_prior_owner_overrode_replacement");
             require(mapper.sent(id, replacement) == 1, "outbox_current_owner_not_marked_sent");
@@ -1572,10 +1925,24 @@ public final class DatabaseProbe {
             require("SENT".equals(sent.get("status")) && sent.get("lease_token") == null
                             && sent.get("lease_until") == null && sent.get("sent_at") != null && sent.get("last_error") == null,
                     "outbox_sent_checkpoint_shape_invalid");
-            return Map.of("staleTokenSentRejected", true, "staleTokenRetryRejected", true,
-                    "expiredOwnerSentRejected", true, "expiredOwnerRetryRejected", true,
-                    "liveOwnerRetrySaved", true, "priorOwnerAfterReplacementRejected", true,
-                    "liveOwnerSentSaved", true, "checkpointShapesValid", true, "rolledBack", true);
+            String failedId=UUID.randomUUID().toString(), failedToken=UUID.randomUUID().toString();
+            insertOutboxEvent(failedId,UUID.randomUUID().toString());
+            require(mapper.claim(failedId,failedToken)==1 && mapper.failed(failedId,failedToken,"INVALID_ENVELOPE")==1,
+                    "outbox_live_owner_permanent_failure_not_saved");
+            var failed=jdbc.queryForMap("SELECT status,lease_token,lease_until,sent_at,last_error FROM outbox_event WHERE event_id=?",failedId);
+            require("FAILED".equals(failed.get("status")) && "INVALID_ENVELOPE".equals(failed.get("last_error"))
+                            && failed.get("lease_token")==null && failed.get("lease_until")==null && failed.get("sent_at")==null,
+                    "outbox_failed_checkpoint_shape_invalid");
+            require(mapper.claim(failedId,UUID.randomUUID().toString())==0 && mapper.sent(failedId,failedToken)==0
+                            && mapper.retry(failedId,failedToken,"PUBLISH_NACK",2)==0
+                            && mapper.failed(failedId,failedToken,"INVALID_ENVELOPE")==0,
+                    "outbox_failed_terminal_state_changed");
+            return Map.ofEntries(Map.entry("staleTokenSentRejected", true), Map.entry("staleTokenRetryRejected", true),
+                    Map.entry("expiredOwnerSentRejected", true), Map.entry("expiredOwnerRetryRejected", true),
+                    Map.entry("liveOwnerRetrySaved", true), Map.entry("priorOwnerAfterReplacementRejected", true),
+                    Map.entry("liveOwnerSentSaved", true), Map.entry("checkpointShapesValid", true), Map.entry("rolledBack", true),
+                    Map.entry("staleAndExpiredFailureOwnersRejected",true),Map.entry("retryBackoffEnforced",true),
+                    Map.entry("permanentFailureTerminalAndLeaseFree",true));
         });
         require(result != null, "missing_outbox_lease_probe_result");
         report.put("outboxLeaseTransitions", result);
@@ -1818,8 +2185,12 @@ public final class DatabaseProbe {
         boolean originalSeventeenBaseline = ORIGINAL_SEVENTEEN_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
         boolean originalEighteenBaseline = ORIGINAL_EIGHTEEN_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
         boolean originalTwentyBaseline = ORIGINAL_TWENTY_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
+        boolean originalTwentyOneBaseline = ORIGINAL_TWENTY_ONE_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
+        boolean originalTwentyTwoBaseline = ORIGINAL_TWENTY_TWO_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
+        boolean originalTwentyThreeBaseline = ORIGINAL_TWENTY_THREE_SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain"));
         boolean olderBaseline = originalElevenBaseline || originalFourteenBaseline || originalFifteenBaseline
-                || originalSixteenBaseline || originalSeventeenBaseline || originalEighteenBaseline || originalTwentyBaseline;
+                || originalSixteenBaseline || originalSeventeenBaseline || originalEighteenBaseline
+                || originalTwentyBaseline || originalTwentyOneBaseline || originalTwentyTwoBaseline || originalTwentyThreeBaseline;
         require(olderBaseline || SNAPSHOT_DOMAIN.equals(previous.get("businessSnapshotDomain")),
                 "comparison_unknown_snapshot_domain");
         String snapshotField = originalElevenBaseline ? "originalElevenSnapshotSha256"
@@ -1828,7 +2199,10 @@ public final class DatabaseProbe {
                 : originalSixteenBaseline ? "originalSixteenSnapshotSha256"
                 : originalSeventeenBaseline ? "originalSeventeenSnapshotSha256"
                 : originalEighteenBaseline ? "originalEighteenSnapshotSha256"
-                : originalTwentyBaseline ? "originalTwentySnapshotSha256" : "businessSnapshotSha256";
+                : originalTwentyBaseline ? "originalTwentySnapshotSha256"
+                : originalTwentyOneBaseline ? "originalTwentyOneSnapshotSha256"
+                : originalTwentyTwoBaseline ? "originalTwentyTwoSnapshotSha256"
+                : originalTwentyThreeBaseline ? "originalTwentyThreeSnapshotSha256" : "businessSnapshotSha256";
         Object actualSnapshot = report.get(snapshotField);
         require(previous.get("businessSnapshotSha256") != null && previous.get("businessSnapshotSha256").equals(actualSnapshot),
                 "comparison_changed_businessSnapshotSha256");

@@ -218,14 +218,21 @@ public final class MvpEvidenceInspector {
         Map<String,Integer> expected=Map.ofEntries(Map.entry("1",-539134757),Map.entry("2",1185045295),
                 Map.entry("3",-394507728),Map.entry("4",-1021150431),Map.entry("5",-507899413),
                 Map.entry("6",186672578),Map.entry("7",-763051633),Map.entry("8",1053255897),
-                Map.entry("9",72853277),Map.entry("10",-573715695),Map.entry("11",1029133993));
-        check(migrations.size()==expected.size(),"all_eleven_existing_migrations_present");
+                Map.entry("9",72853277),Map.entry("10",-573715695),Map.entry("11",1029133993),
+                Map.entry("12",1723908793),Map.entry("13",-1202069766),Map.entry("14",-1562459282));
+        check(migrations.size()==expected.size(),"all_fourteen_existing_migrations_present");
         for(Map<String,Object> migration:migrations) check(expected.containsKey(text(migration,"version"))
                 &&expected.get(text(migration,"version")).longValue()==number(migration,"checksum")
                 &&truth(migration.get("success")),"existing_migration_checksums_unchanged");
         report.put("readOnlyDatabaseTransaction",true); report.put("migrationsValidated",expected.size());
         report.put("accessGrantTableRows",count("SELECT COUNT(*) FROM access_grant"));
+        report.put("messageRejectionTableRows",count("SELECT COUNT(*) FROM message_rejection"));
+        report.put("anchorRetryRequestTableRows",count("SELECT COUNT(*) FROM anchor_retry_request"));
+        report.put("storageCleanupTaskTableRows",count("SELECT COUNT(*) FROM storage_cleanup_task"));
         report.put("legacySixteenTableSnapshotUnchangedByAccessGrantTable",true);
+        report.put("legacySixteenTableSnapshotUnchangedByMessageRejectionTable",true);
+        report.put("legacySixteenTableSnapshotUnchangedByAnchorRetryRequestTable",true);
+        report.put("legacySixteenTableSnapshotUnchangedByStorageCleanupTaskTable",true);
         List<Map<String,Object>> tasks=query("""
                 SELECT id,status,completed_at,
                     (completed_at>=created_at AND completed_at<=UTC_TIMESTAMP(3)) AS completion_time_valid
@@ -271,7 +278,8 @@ public final class MvpEvidenceInspector {
 
     private void pendingWork() throws Exception {
         Map<String,Long> pending=new LinkedHashMap<>();
-        pending.put("outbox",count("SELECT COUNT(*) FROM outbox_event WHERE status<>'SENT'"));
+        pending.put("outbox",count("SELECT COUNT(*) FROM outbox_event WHERE status IN ('PENDING','SENDING')"));
+        report.put("failedOutboxTableRows",count("SELECT COUNT(*) FROM outbox_event WHERE status='FAILED'"));
         pending.put("upload",count("SELECT COUNT(*) FROM upload_session WHERE status IN ('UPLOADING','VERIFYING')"));
         pending.put("anchor",count("SELECT COUNT(*) FROM chain_submission WHERE status IN ('PENDING','SUBMITTED','UNKNOWN') OR (status='FAILED' AND retryable=TRUE)"));
         pending.put("consumer",count("SELECT COUNT(*) FROM consumed_event WHERE status<>'DONE'"));

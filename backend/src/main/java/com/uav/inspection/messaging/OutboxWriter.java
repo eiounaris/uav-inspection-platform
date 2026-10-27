@@ -20,9 +20,18 @@ public class OutboxWriter {
     /** The business result and its event must commit together. */
     @Transactional(propagation = Propagation.MANDATORY)
     public String enqueue(String eventType, String bizId, String traceId) {
+        return enqueue(eventType,bizId,traceId,0);
+    }
+
+    /** A manual intent creates a new dispatch; retrying publication still reuses its event ID. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public String enqueue(String eventType,String bizId,String traceId,int dispatchNo) {
+        if(dispatchNo<0) throw new IllegalArgumentException("Invalid outbox dispatch number");
         String id = UUID.randomUUID().toString();
         MessageEvent event = new MessageEvent(id, eventType, bizId, traceId);
-        if (mapper.insert(id, eventType, bizId, JSON.writeValueAsString(event)) != 1) {
+        int inserted=dispatchNo==0?mapper.insert(id,eventType,bizId,JSON.writeValueAsString(event))
+                :mapper.insertDispatch(id,eventType,bizId,dispatchNo,JSON.writeValueAsString(event));
+        if (inserted != 1) {
             throw new IllegalStateException("Outbox insert failed");
         }
         return id;

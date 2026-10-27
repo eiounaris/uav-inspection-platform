@@ -2,6 +2,7 @@ package com.uav.inspection.evidence.upload;
 
 import com.uav.inspection.common.error.BusinessException;
 import com.uav.inspection.common.error.ErrorCode;
+import com.uav.inspection.common.temp.TemporaryFileManager;
 import com.uav.inspection.evidence.storage.ObjectStorage;
 import com.uav.inspection.evidence.storage.UploadSettings;
 import com.uav.inspection.evidence.upload.UploadModels.CreateUploadRequest;
@@ -13,6 +14,7 @@ import com.uav.inspection.identity.CurrentUser;
 import com.uav.inspection.device.CurrentDevice;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -22,7 +24,6 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.UUID;
@@ -35,11 +36,19 @@ public class UploadService {
     private final UploadSettings settings;
     private final ObjectStorage storage;
     private final UploadTransactions transactions;
+    private final TemporaryFileManager temporaryFiles;
 
     public UploadService(UploadSettings settings, ObjectStorage storage, UploadTransactions transactions) {
+        this(settings,storage,transactions,new TemporaryFileManager());
+    }
+
+    @Autowired
+    public UploadService(UploadSettings settings,ObjectStorage storage,UploadTransactions transactions,
+                         TemporaryFileManager temporaryFiles) {
         this.settings = settings;
         this.storage = storage;
         this.transactions = transactions;
+        this.temporaryFiles=temporaryFiles;
     }
 
     public UploadProgress create(CurrentUser actor, CreateUploadRequest request) {
@@ -86,9 +95,8 @@ public class UploadService {
         if (contentLength >= 0) {
             UploadValidation.exactLength(contentLength, plan.expectedSize());
         }
-        Path temporary = null;
-        try {
-            temporary = temporaryFile(plan.expectedSize());
+        try (var handle=temporaryFile(plan.expectedSize())) {
+            Path temporary=handle.path();
             SpooledPart part = spool(input, temporary, plan);
             PartResult known = access.known(part.size(), part.sha256());
             if (known != null) {
@@ -115,20 +123,17 @@ public class UploadService {
         } catch (IOException exception) {
             // I/O details may include local paths. HTTP errors use only the stable public error code.
             throw new BusinessException(ErrorCode.DEPENDENCY_UNAVAILABLE);
-        } finally {
-            deleteTemporaryFile(temporary);
         }
     }
 
-    private Path temporaryFile(long expectedSize) throws IOException {
+    private TemporaryFileManager.Handle temporaryFile(long expectedSize) throws IOException {
         Path directory = settings.tempDirectory();
         Files.createDirectories(directory);
         long usable = Files.getFileStore(directory).getUsableSpace();
         if (usable < settings.minFreeSpace() || expectedSize > usable - settings.minFreeSpace()) {
             throw new BusinessException(ErrorCode.DEPENDENCY_UNAVAILABLE);
         }
-        return Files.createTempFile(directory, "upload-", ".part",
-                PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+        return temporaryFiles.create(directory,"upload-",".part");
     }
 
     private static SpooledPart spool(InputStream input, Path target, PartPlan plan) throws IOException {
@@ -178,17 +183,6 @@ public class UploadService {
         } catch (RuntimeException exception) {
             // Cleanup can be retried by the later reference-aware collector. Do not expose keys or SDK errors.
             log.warn("An unused upload attempt could not be removed; deferred collection is required.");
-        }
-    }
-
-    private static void deleteTemporaryFile(Path temporary) {
-        if (temporary == null) {
-            return;
-        }
-        try {
-            Files.deleteIfExists(temporary);
-        } catch (IOException exception) {
-            log.warn("An upload temporary file could not be removed.");
         }
     }
 

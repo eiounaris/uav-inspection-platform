@@ -283,7 +283,7 @@ class TaskAcceptanceServiceTest {
         TaskDetail result=service.replaceMembers(OWNER_ADMIN,TASK,new ReplaceMembersRequest(List.of(),5L));
 
         assertEquals("COMPLETED",result.status()); assertEquals(DATABASE_NOW,result.completedAt());
-        verify(tasks).deleteManagedMembers(TASK,OWNER,OWNER_ADMIN.id());
+        verify(tasks,never()).deleteManagedMember(anyString(),anyString(),anyString());
         verify(tasks,never()).insertSubtask(anyString(),anyString(),anyString());
         verify(tasks,never()).startTask(anyString(),anyLong());
         verify(tasks,never()).insertExecution(anyString(),anyString(),anyString());

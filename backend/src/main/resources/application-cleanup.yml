@@ -1,0 +1,8 @@
+inspection:
+  cleanup:
+    grace-seconds: ${CLEANUP_GRACE_SECONDS:3600}
+    batch-size: ${CLEANUP_BATCH_SIZE:100}
+    scan-delay-ms: ${CLEANUP_SCAN_DELAY_MS:60000}
+    scheduler-enabled: ${CLEANUP_SCHEDULER_ENABLED:true}
+  verification:
+    temp-directory: ${VERIFICATION_TEMP_DIRECTORY:.local/uploads/verification}

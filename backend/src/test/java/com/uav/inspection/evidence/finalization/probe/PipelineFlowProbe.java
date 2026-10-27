@@ -108,6 +108,7 @@ public final class PipelineFlowProbe {
     private final List<Account> accounts = new ArrayList<>();
     private final List<String> secrets = new ArrayList<>();
     private final Set<String> uploadIds = new LinkedHashSet<>();
+    private final Map<String,Set<String>> rejectionIdsBeforeMarker = new LinkedHashMap<>();
     private final AtomicInteger sequence = new AtomicInteger();
     private final SecureRandom random = new SecureRandom();
     private JdbcTemplate jdbc;
@@ -440,13 +441,17 @@ public final class PipelineFlowProbe {
     }
     private void duplicateFinalize(String upload)throws Exception {
         String payload=jdbc.queryForObject("SELECT CAST(payload AS CHAR) FROM outbox_event WHERE biz_id=? AND event_type='FILE_FINALIZE_REQUESTED'",String.class,upload);
+        byte[] invalidMarker=new byte[]{'{'};
+        String markerSha=sha256(invalidMarker);
+        rejectionIdsBeforeMarker.computeIfAbsent(markerSha,hash->new LinkedHashSet<>(jdbc.queryForList(
+                "SELECT id FROM message_rejection WHERE consumer_code='FILE_FINALIZE' AND body_sha256=?",String.class,hash)));
         long deadBefore=readyCount(deadQueue);
         rabbit.execute(channel->{
             var properties=new AMQP.BasicProperties.Builder().deliveryMode(2).contentType("application/json").build();
             channel.basicPublish(exchange,"file.finalize",true,properties,payload.getBytes(StandardCharsets.UTF_8));
             // Same publishing channel, one consumer and prefetch=1 make the rejected marker a processing
             // barrier: it cannot reach the dead-letter queue before the duplicate has been handled.
-            channel.basicPublish(exchange,"file.finalize",true,properties,new byte[]{'{'});
+            channel.basicPublish(exchange,"file.finalize",true,properties,invalidMarker);
             return null;
         });
         String event=eventId(upload);
@@ -489,6 +494,15 @@ public final class PipelineFlowProbe {
     }
     private void cleanupFixtures() {
         faults.armed.set(false);
+        int rejectedDeleted=0;
+        for(var entry:rejectionIdsBeforeMarker.entrySet()) {
+            List<String> actual=jdbc.queryForList("SELECT id FROM message_rejection WHERE consumer_code='FILE_FINALIZE' AND body_sha256=?",String.class,entry.getKey());
+            for(String id:actual)if(!entry.getValue().contains(id))rejectedDeleted+=jdbc.update(
+                    "DELETE FROM message_rejection WHERE id=? AND consumer_code='FILE_FINALIZE' AND body_sha256=?",id,entry.getKey());
+            for(String original:entry.getValue())require(count("SELECT COUNT(*) FROM message_rejection WHERE id=? AND consumer_code='FILE_FINALIZE' AND body_sha256=?",original,entry.getKey())==1,
+                    "preexisting_rejection_for_shared_literal_marker_is_preserved");
+        }
+        report.put("fixtureMessageRejectionsDeleted",rejectedDeleted);
         Set<String> taskIds=new LinkedHashSet<>();
         for(Account account:accounts)taskIds.addAll(jdbc.queryForList("SELECT id FROM inspection_task WHERE created_by=?",String.class,account.id));
         for(String task:taskIds)uploadIds.addAll(jdbc.queryForList("SELECT id FROM upload_session WHERE task_id=?",String.class,task));

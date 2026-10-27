@@ -58,6 +58,13 @@ public interface FinalizationMapper {
     int claim(@Param("id") String id, @Param("token") String token);
 
     @Update("""
+            UPDATE upload_session SET lease_until=TIMESTAMPADD(SECOND,120,UTC_TIMESTAMP(3)),
+                lock_version=lock_version+1
+            WHERE id=#{id} AND status='VERIFYING' AND lease_token=#{token} AND lease_until>UTC_TIMESTAMP(3)
+            """)
+    int renew(@Param("id") String id, @Param("token") String token);
+
+    @Update("""
             UPDATE upload_session SET status='COMPLETED',lease_token=NULL,lease_until=NULL,next_action_at=NULL,
                 last_error=NULL,lock_version=lock_version+1
             WHERE id=#{id} AND status='VERIFYING' AND lease_token=#{token} AND lease_until>UTC_TIMESTAMP(3)

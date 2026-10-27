@@ -93,15 +93,15 @@ public interface TaskMapper {
             """)
     int addMember(@Param("taskId") String taskId, @Param("userId") String userId);
 
-    @Delete("""
-            DELETE m FROM task_member m JOIN app_user u ON u.id = m.user_id
-             WHERE m.task_id = #{taskId} AND u.org_id = #{orgId} AND m.user_id <> #{creatorId}
-            """)
-    int deleteManagedMembers(@Param("taskId") String taskId, @Param("orgId") String orgId,
-                             @Param("creatorId") String creatorId);
+    @Delete("DELETE FROM task_member WHERE task_id=#{taskId} AND user_id=#{userId} AND user_id<>#{creatorId}")
+    int deleteManagedMember(@Param("taskId") String taskId, @Param("userId") String userId,
+                            @Param("creatorId") String creatorId);
 
     @Select("SELECT id, org_id, username, CAST(roles AS CHAR) AS roles_json, enabled FROM app_user WHERE id = #{id}")
     CandidateRow findCandidate(@Param("id") String id);
+
+    @Select("SELECT id, org_id, username, CAST(roles AS CHAR) AS roles_json, enabled FROM app_user WHERE id = #{id} FOR UPDATE")
+    CandidateRow lockCandidate(@Param("id") String id);
 
     @Select("SELECT " + REQUIREMENT_COLUMNS + " FROM material_requirement WHERE task_id = #{taskId} ORDER BY id")
     List<RequirementView> listRequirements(@Param("taskId") String taskId);

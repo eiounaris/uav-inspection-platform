@@ -14,7 +14,8 @@ import static org.mockito.Mockito.*;
 class FinalizationMessageListenerTest {
     private final FinalizationProcessor processor = mock(FinalizationProcessor.class);
     private final Channel channel = mock(Channel.class);
-    private final FinalizationMessageListener listener = new FinalizationMessageListener(processor);
+    private final MessageRejectionRecorder rejections = mock(MessageRejectionRecorder.class);
+    private final FinalizationMessageListener listener = new FinalizationMessageListener(processor, rejections, () -> {});
     private final MessageEvent event = new MessageEvent("11000000-0000-4000-8000-000000000001",
             MessageEvent.FILE_FINALIZE_REQUESTED, "22000000-0000-4000-8000-000000000001", "listener-trace");
 
@@ -38,7 +39,9 @@ class FinalizationMessageListenerTest {
     @Test
     void rejectsMalformedMessageIntoDeadLetterQueueWithoutCallingBusinessProcessor() throws Exception {
         listener.onMessage(message("{\"unexpected\":true}".getBytes(java.nio.charset.StandardCharsets.UTF_8)), channel);
-        verify(channel).basicReject(17L, false);
+        var ordered = inOrder(rejections, channel);
+        ordered.verify(rejections).record(eq("FILE_FINALIZE"), any(byte[].class), anyString(), isNull());
+        ordered.verify(channel).basicReject(17L, false);
         verifyNoInteractions(processor);
         verify(channel, never()).basicAck(anyLong(), anyBoolean());
     }
@@ -47,7 +50,9 @@ class FinalizationMessageListenerTest {
     void rejectsEnvelopeWithoutMatchingDurableEventInsteadOfReplayingForever() throws Exception {
         doThrow(new InvalidMessageException()).when(processor).process(event);
         listener.onMessage(message(JsonMapper.builder().build().writeValueAsBytes(event)), channel);
-        verify(channel).basicReject(17L, false);
+        var ordered = inOrder(rejections, channel);
+        ordered.verify(rejections).record(eq("FILE_FINALIZE"), any(byte[].class), anyString(), isNull());
+        ordered.verify(channel).basicReject(17L, false);
         verify(channel, never()).abort();
         verify(channel, never()).basicAck(anyLong(), anyBoolean());
     }

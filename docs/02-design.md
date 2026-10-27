@@ -3,7 +3,7 @@
 | 项目 | 内容 |
 | --- | --- |
 | 目标版本 | MVP（首版可演示版本） |
-| 更新日期 | 2026-10-25 |
+| 更新日期 | 2026-10-27 |
 | 需求依据 | [01-requirements.md](01-requirements.md) |
 | 架构 | Spring Boot 模块化单体，数据库作为业务状态的权威来源 |
 | Fabric 范围 | 两个业务组织、一个通道、一份链码、两个业务操作 |
@@ -99,6 +99,8 @@ T008 使用 Spring Security Resource Server 与 Nimbus 实现 JWT。JWT_SECRET �
 统一 ResourcePermissionService 执行以上判断。列表查询在 SQL 中按任务成员或授权过滤，分页前完成过滤；详情、预览、下载、核验再次检查同一规则。
 
 T009 已实现任务路径：创建者必须为 OrgA 的 OWNER_TASK_ADMIN；读任务需有本机构适用业务角色和显式成员关系，ORG_ADMIN 单独不能读取任务。修改前锁定任务、重读并锁定当前账号，重新校验 enabled、tokenVersion、机构、业务角色和成员关系。数据库事务使用 READ_COMMITTED，MyBatis 使用 STATEMENT 缓存范围，锁等待后的权限重读不复用旧快照或旧缓存。无权限和不存在的任务/子任务统一返回 403；有业务角色但没有成员关系的用户任务列表为空，ORG_ADMIN-only 任务列表返回 403。T020 接入指定版本的共享路径，不改变任务接口的成员要求。
+
+T026 对成员替换进一步固定账号锁顺序：先锁父任务，非锁定重读当前身份，仅用于初步授权及确定本机构范围；收集当前本机构成员、请求候选及操作者账号，去重后按编号升序逐行加锁。随后再次重验当前身份、tokenVersion、角色、成员资格和所有候选的启用状态及角色，才执行替换和任务 CAS。成员删除按已确认的具体成员编号操作，不使用会隐式锁定其他账号的多表 DELETE JOIN；创建者和对方机构成员保留。其他任务操作仍按各自的父任务锁和最终权限检查执行。
 
 创建任务时将创建人加入任务成员。委托方管理员指派本机构复核、审批成员，通过任务分配操作加入运营商任务管理员；运营商管理员可指派本机构操作人员，不能添加委托方成员或更改委托方验收要求。成员维护接口只替换调用者有权管理的本机构成员，必须保留其他机构成员和任务创建人，不能将 userIds 解释为整个任务的全量成员替换。
 
@@ -229,7 +231,7 @@ T010 追加 V4__upload_sessions_and_versions.sql 建立 upload_session、upload_
 
 预检和最终登记均由独立 UploadTransactions Bean 的短事务执行，统一先锁任务、重读并锁定账号，再锁子任务/资料/执行和会话。写对象期间不持有数据库事务。最终登记重新校验权限、所有者、任务/批次、状态、数据库时间期限及已有分片：同片同摘要幂等返回，不同内容 PART_CONTENT_CONFLICT/409；新分片、会话版本递增与 UPLOAD_PART_STORED 审计同事务，创建记录 UPLOAD_SESSION_CREATED。
 
-每次对象写入使用 upload-parts/{uploadId}/{partNo}/{attemptId}。只有事务正常返回且确认本次键未被采用时，才清理本次竞争失败的对象。登记或提交异常可能已提交引用，不能盲删候选对象；未引用尝试的保留期回收在 T025 实现。临时文件在 finally 清理。业务响应不包含对象键、存储凭据或下载地址，分片全部到齐后仍为 UPLOADING、versionId=null；完成接口、定版和 Outbox 由 T011 接入。
+每次对象写入使用 upload-parts/{uploadId}/{partNo}/{attemptId}。只有事务正常返回且确认本次键未被采用时，才清理本次竞争失败的对象。登记或提交异常可能已提交引用，不能盲删候选对象；未引用尝试按第 10.1 节重新检查后回收。临时文件在 finally 清理，活动期间持有独立旁路锁文件。业务响应不包含对象键、存储凭据或下载地址，分片全部到齐后仍为 UPLOADING、versionId=null；完成接口、定版和 Outbox 由 T011 接入。
 
 #### 4.3.2 T011 异步定版边界
 
@@ -241,16 +243,19 @@ PNG 检查完整块边界、CRC、IEND，并解码；JPEG 检查段及结束标�
 
 最终对象键为 evidence-files/{uploadId}/{leaseToken}。完成事务重新锁定任务及资料范围、检查租约 token 和数据库有效期，从 material_requirement.next_version_no 分配版本号；正式版本、next_version_no 递增、PENDING chain_submission、EVIDENCE_ANCHOR_REQUESTED、COMPLETED 上传及审计原子提交。上链事件的 bizId 是 chain_submission.id。当前批次的新版本会使 WAITING_ACCEPTANCE 回到 RUNNING；任务完成后不再新增正式版本。
 
-临时失败的检查点与 consumed_event.DONE 一起提交后才允许 ACK。独立恢复扫描默认每 10 秒查找已到期计划及失效租约，重新调用同一处理器，并绕过消费 DONE 检查；DONE 不会使业务恢复停止。完整续租、上传/存证统一扫描和跨进程故障矩阵仍由 T023/T027 完善。数据库提交结果不明或租约失效时保留最终候选对象，T025 再按引用回收。
+临时失败的检查点与 consumed_event.DONE 一起提交后才允许 ACK。独立恢复扫描默认每 10 秒查找已到期计划及失效租约，重新调用同一处理器，并绕过消费 DONE 检查；DONE 不会使业务恢复停止。T023 的续租与公共扫描执行规则见第 8.4 节；完整跨系统故障矩阵由 T027 验收。数据库提交结果不明或租约失效时保留最终候选对象，由第 10.1 节按引用回收。
 
 ### 4.4 存证与消息表
 
 | 表 | 关键字段 | 约束或用途 |
 | --- | --- | --- |
 | chain_submission | id、version_id、status、confirmed_tx_id、confirmed_by、retryable、retry_count、next_action_at、lease_token、lease_until、last_error | version_id 唯一；业务存证状态唯一来源 |
+| anchor_retry_request | id、submission_id、requested_by、client_request_id、request_hash、reason、dispatch_no、baseline_attempt_no、event_id、created_at | T024 新增；唯一 (submission_id, requested_by, client_request_id)、(submission_id, dispatch_no) 及 event_id；保存人工检查意图，不改写旧尝试 |
+| storage_cleanup_task | id、object_key、object_key_hash、upload_id、object_last_modified、object_size、status、attempt_count、next_action_at、lease_token、lease_until、last_error、created_at、updated_at | T025 新增；对象键摘要唯一，原始键仅供内部删除使用；无上传外键，允许记录已无会话的孤立对象 |
 | chain_attempt | id、submission_id、attempt_no、tx_id、phase、transaction_bytes、commit_bytes、validation_code、block_number、last_error、created_at、updated_at | tx_id 唯一，(submission_id, attempt_no) 唯一；保留各次尝试 |
 | outbox_event | event_id、event_type、biz_id、dispatch_no、payload、status、next_send_at、lease_token、lease_until、sent_at、last_error | event_id 主键；唯一 (event_type, biz_id, dispatch_no) |
 | consumed_event | consumer_code、event_id、status、updated_at | 联合主键，状态 PROCESSING/DONE；与业务检查点一起提交 |
+| message_rejection | id、consumer_code、body_sha256、body_size、reason_code、message_id、created_at | T022 新增；唯一 (consumer_code, body_sha256)，只保留首次安全拒收元数据，无业务外键 |
 
 transaction_bytes 为背书后的可恢复交易数据，commit_bytes 为提交后取得的可恢复确认请求。二者均为受限访问的二进制字段，不经普通业务接口返回。
 
@@ -533,7 +538,19 @@ T011 使用显式 messaging profile 注册 RabbitMQ 连接、拓扑及处理器�
 
 默认采用持久化 Direct Exchange inspection.events，定版队列 inspection.file.finalize、上链队列 inspection.evidence.anchor；坏消息进入 inspection.dead.events / inspection.dead。Outbox 通过数据库短事务领取 SENDING 租约，在事务外发送持久化消息；等待 correlated confirm，并确认不存在 mandatory return 后，才以原租约条件更新 SENT。超时、NACK 或无法路由时保留原 eventId，按 2/10/30/60/300 秒退避；发送确认后数据库失败则由失效发送租约接管。
 
-手动 ACK 在业务处理器正常完成之后执行。非法消息或无对应持久事件的消息拒绝到死信队列；数据库检查点无法提交时保留未 ACK 消息并关闭当前消费通道，容器间隔 5 秒恢复，避免立即重入。未启用 ledger 的 T011 模式不注册上链消费者；T012 在显式 ledger profile 下注册上链消费者及恢复扫描。发布确认与返回顺序参照 [CorrelationData API](https://docs.spring.io/spring-amqp/docs/current/api/org/springframework/amqp/rabbit/connection/CorrelationData.html)，跨系统业务结果仍由数据库及后续链确认判断。
+手动 ACK 在业务结果或恢复计划提交后执行。T022 的公共消息处理入口在返回监听器前，以独立短事务重新锁定任务与业务行，要求 consumed_event.DONE 且已有终态，或已清空处理租约并持久化 next_action_at。当前被其他 Worker 领取、租约失效、写入未提交或只有 DONE 标志而没有恢复计划时，继续保留未确认投递。独立恢复扫描仍绕过消费 DONE 检查，沿原业务行继续处理。
+
+数据库处理或拒收记录无法提交时，监听器在事务结束后保持消息未 ACK、未 reject，固定等待 5 秒再关闭消费通道。运行中的消费者重启可能绕过容器启动恢复间隔，因此该等待直接在共享投递处理器中执行；等待期间 prefetch=1、单消费者限制在途工作，中断时保留中断标志并关闭通道。未启用 ledger 的 T011 模式不注册上链消费者；T012 在显式 ledger profile 下注册上链消费者及恢复扫描。发布确认与返回顺序参照 [CorrelationData API](https://docs.spring.io/spring-amqp/docs/current/api/org/springframework/amqp/rabbit/connection/CorrelationData.html)，跨系统业务结果仍由数据库及后续链确认判断。
+
+#### 8.1.1 T022 发布身份、永久失败与安全拒收
+
+Outbox 领取时读取独立的 event_id、event_type、biz_id 及 payload，使用数据库当前时间判断 PENDING 到期或 SENDING 租约过期；条件领取和 SKIP LOCKED 共同限制并发。发送租约默认 120 秒，等待发布确认最长 10 秒；SENT、retry、FAILED 更新都要求原 token 仍持有未过期 SENDING 租约。条件更新未命中即停止本次批次，发送成功后的数据库异常保留原事件及发送租约，后续接管重发沿用相同 eventId 和新的领取 token。
+
+生产者和两类消费者共用 MessageEvent.decode：消息正文不超过 4096 字节，使用严格 UTF-8，JSON 恰好含 eventId、eventType、bizId、traceId 四个字符串字段；重复字段、未知字段、尾随 JSON 或非法编号均拒绝。生产者还将信封与独立持久化身份列逐项比较。不可发送的持久信封以 INVALID_ENVELOPE 转入 Outbox FAILED，清空租约，保留 sent_at=null，不再自动领取；临时发送失败继续按原退避计划重试。V12 只扩展状态和配对约束，不修改旧列或旧迁移。
+
+生产消息设置持久化、JSON/UTF-8 及 messageId=eventId；为兼容已有消息，消费者允许缺失 messageId，但提供时必须与信封编号相同。非法信封、未知持久事件或 messageId 不一致，先由独立事务提交 message_rejection，再执行 basicReject(requeue=false) 进入私有死信队列。拒收原因固定为 INVALID_ENVELOPE、UNKNOWN_EVENT、MESSAGE_ID_MISMATCH，数据库只记录 consumer、正文 SHA-256、长度、规范 messageId 或 null、原因码和 UTC 时间；同消费者同正文保留首次记录。数据库记录失败不执行拒绝，保留原投递并退避重试。
+
+拒收元数据不包含消息正文、任意 header、异常文本、凭据或对象地址；Broker 的死信队列保留原投递以供受控排查，报告及普通日志只使用安全元数据。T022 的验证入口为 `python3 deploy/scripts/verify-messaging.py`，通过独立 JVM 的真实确认后退出及原租约自然到期验证重发；T023 的续租及公共扫描规则见第 8.4 节，完整故障矩阵继续由后续 M4 任务验收。
 
 ### 8.2 存证处理顺序
 
@@ -550,7 +567,7 @@ transactionBytes 在提交前由 Transaction.getBytes() 保存，txId 用 getTra
 
 getBytes() 保存的检查点通常尚未包含客户端对交易或确认请求的签名；恢复后由 Gateway 配置的 signer 补签。因此必须使用原机构、同一客户端证书及与该证书匹配的私钥恢复，不能仅因 MSP 相同就替换为该机构其他身份。已实现的 CheckpointValidator 在恢复 transactionBytes 前校验 creator 的 MSP/证书、channel、外部及内部 transactionId、chaincode；在恢复 commitBytes 前校验请求身份、channel 和 transactionId。确认请求本身不包含 chaincode 字段，不对其声称存在该项校验。校验不通过直接拒绝恢复，不向网络提交或查询。
 
-以上序列化、校验和同身份跨进程调用已由 T006 验证。T012 已接入下节数据库检查点及基础恢复；完整故障矩阵、人工重检及统一续租仍由 T023/T024/T027 实施与验收。
+以上序列化、校验和同身份跨进程调用已由 T006 验证。T012 已接入下节数据库检查点及基础恢复，T023 补齐续租；人工重检见第 8.3.1 节，完整故障矩阵继续由 T027 验收。
 
 #### 8.2.1 T012 业务存证实现边界
 
@@ -562,7 +579,7 @@ AnchorProcessor 不持有数据库事务。AnchorTransactions 先锁任务再锁
 
 提交结果或确认请求超时写 UNKNOWN 和下一次检查时间，保留原尝试。恢复时优先使用已有 commit_bytes；没有 commit_bytes 时重查业务键，再用原 transaction_bytes 及 txId 恢复提交，不盲目重新背书。身份或通道检查点校验被拒绝也保持 UNKNOWN，等待恢复原配置；本地恢复失败不能证明原交易无效。只有原尝试已明确 INVALID、属于允许重试的 MVCC/幻读冲突且业务键仍不存在，才允许产生新尝试；明确权限错误和摘要冲突不自动重试，DUPLICATE_TXID 且业务结果尚不明时继续 UNKNOWN。
 
-存证结果或持久化等待计划与 EVIDENCE_ANCHOR 消费 DONE、审计一起提交后才 ACK。基础扫描默认每 10 秒复用同一处理器，绕过 DONE；UNKNOWN 不设次数上限，明确可重试 FAILED 暂以 10 次为界，完整策略和人工入口由 T024 完善。基础租约不含续租，完整续租及进程故障矩阵留 T023/T027。
+存证结果或持久化等待计划与 EVIDENCE_ANCHOR 消费 DONE、审计一起提交后才 ACK。扫描默认每 10 秒复用同一处理器，绕过 DONE；UNKNOWN 不设对账次数上限，明确冲突的重试按下述 T024 规则计数。T023 为处理租约增加独立续租，完整跨系统故障矩阵留 T027 验收。
 
 GET /evidence-versions/{id} 返回固定版本元数据及 anchor；GET /evidence-versions/{id}/anchor 返回数据库存证状态、首次确认交易编号、最近尝试编号/阶段、验证码、区块号和安全错误码。这两个查询不调用 Fabric。每次重新校验当前账号及任务路径或精确版本共享授权，未知或不可见版本均为 403；单独 ORG_ADMIN 角色不授予任务数据权限，但可以像其他注册账号一样申请并取得具体版本授权。T020 的正式版本列表和下载接口见第 6.4 节；存证状态仍只能由真实处理流程形成。
 
@@ -578,6 +595,32 @@ GET /evidence-versions/{id} 返回固定版本元数据及 anchor；GET /evidenc
 chain_attempt.phase 采用 PREPARED、SUBMITTING、SUBMITTED、VALID、INVALID、UNKNOWN，表达具体交易尝试；chain_submission.status 表达业务版本是否已存证，两者不混用。
 
 每 10 秒扫描到期的 VERIFYING 上传及 PENDING/SUBMITTED/UNKNOWN、可重试 FAILED 存证，复用同一业务处理器及租约。扫描直接按业务行领取工作，不经过 consumed_event.DONE 的消息去重短路；DONE 只说明该条消息已完成处理或持久化移交，不代表业务一定已结束。首版以提交状态查询和定时对账作为恢复路径，不依赖链事件监听。
+
+#### 8.3.1 T024 明确失败预算与人工重新检查
+
+业务 retry_count 保留累计检查点次数，用于退避，不再作为明确失败的预算；达到整数上限后饱和计数，UNKNOWN 仍能继续对账。明确失败预算只统计本轮内 chain_attempt.phase=INVALID 且验证码为 MVCC_READ_CONFLICT 或 PHANTOM_READ_CONFLICT 的尝试。每轮最多十次这类失败，包含首次失败；达到上限后 FAILED 保留 retryable=true、next_action_at=null，等待人工申请新一轮。查询暂不可用、确认不明和背书前暂不可用不消耗这项预算。
+
+确认请求优先恢复原 commitBytes；没有确认请求时查询原业务键，再按原 transactionBytes 及 txId 恢复提交。查不到记录不证明原交易无效。只有上一尝试明确属于可重试的 INVALID、业务记录尚不存在且本轮预算充足，才允许重新背书并追加尝试。预算检查同时覆盖 UNKNOWN 行上保留的已明确无效尝试，避免一次后续查询故障绕过上限。已经确认的存证保留首次有效交易号，不因再次查询失败降级。
+
+明确的登记权限拒绝、业务键摘要冲突均进入不可自动重试 FAILED，人工入口也不能覆盖。交易可能已提交后，如果确认查询遇到权限或配置错误，仍保留 UNKNOWN 和原检查点进行对账，不把查询失败解释为原交易无效，不重新背书。
+
+人工入口为 POST /evidence-versions/{id}/anchor-retries，正文包含 clientRequestId 和必填 reason。原因最多 1000 字符，空白文本拒绝；请求编号为规范 UUID。同一存证、申请人及请求编号重复使用且规范化原因相同时返回原 202 回执，不新增事件或审计；内容不同返回 409。每次请求包括重放均先检查当前身份、角色和任务成员资格，仅允许 OrgB 的 OPERATOR_TASK_ADMIN，不回退到版本共享授权。未知或不可见版本返回 403。
+
+新申请要求任务尚未完成、存证未 CONFIRMED 且不是不可重试 FAILED、当前没有处理租约、最新事件已有 DONE 回执。已有待处理意图或忙 Worker 时返回 409。按父任务、当前账号、版本和存证加锁，将新 dispatch_no、只含四字段信封的新 Outbox、anchor_retry_request 及 EVIDENCE_ANCHOR_RECHECK_REQUESTED 审计原子提交；HTTP 返回 202 表示检查意图已接受，不调用 Fabric。申请记录保存原因、操作者、请求摘要及当前最大 attempt_no 作为下一轮失败预算基线，旧计数、尝试和交易字节均保留。幂等重放在之后已确认或任务完成时仍可返回原回执，不触发新处理。
+
+恢复扫描选择该存证最新 dispatch_no 对应的事件；领取事务在父任务锁下再次比较事件编号，拒绝人工申请提交前已选出的旧扫描结果。消息重投和扫描均沿用本步之前的处理租约、独立续租及 ACK 门槛。V13 仅新增申请表和外键约束，原十二版迁移及旧表列不变。验证入口为 `python3 deploy/scripts/verify-anchor-retries.py`，手动请求见 [t024.http](../examples/t024.http)。
+
+### 8.4 T023 处理续租与业务恢复执行
+
+文件定版及存证处理共用 ProcessingLeaseKeeper。业务领取提交后立即续租一次，再由独立的两个固定线程每 30 秒执行短续租事务，将 lease_until 延长至数据库当前时间后 120 秒。续租沿用任务在前、业务行在后的锁序，只接受原 token、尚未到期且仍可处理的业务状态；过期租约只能重新领取，不能靠旧 token 复活。不新增数据库表或迁移。
+
+Worker 在每段文件读取、格式验证、对象写入和 Gateway 调用前后检查租约保护，并在保存检查点或最终结果前再次检查。续租返回无变更、数据库异常、保护器停止或线程中断，均使该次处理停止；不会把续租失败归为普通存储/链错误，再用旧责任写入重试计划。保护器以续租开始时的单调时间设置保守的本地 120 秒期限，避免数据库响应迟到或续租线程停顿后继续使用未经确认的租约；最终权威仍为数据库 token、状态与有效期条件。
+
+已发出的阻塞 I/O 可能无法立即取消。返回时重新检查保护器，失去租约的结果不得生成版本、改变消费回执或推进交易；对象写入后结果不明时保留候选对象，由 T025 按引用清理。数据库终态事务提交后直接关闭该保护器，不再追加一次租约检查，避免终态已清空租约时被并发心跳误报。关闭会取消心跳并释放登记容量；单进程最多登记 64 个保护器，不为每个任务创建线程。
+
+两个恢复定时入口沿用既有启用开关及默认 10 秒间隔，将工作提交给 BusinessRecoveryDispatcher。它使用两个固定恢复线程、不排队，每类业务最多同时运行一个批次，忙时等待下一次扫描；定时线程因此不承担对象或 Gateway I/O，续租线程也独立于恢复线程。每批仍按持久化到期时间选择最多十条业务，消息与扫描调用同一个处理器，扫描显式绕过 DONE。公共 DurableRecovery 逐条恢复持久 traceId，某条失败不影响同批其他条目；线程中断后停止选择和领取新工作。应用关闭先中断恢复工作，再停止其依赖的续租器和数据库。
+
+VERIFYING 临时文件或存储故障继续保存 2、10、30、60、300 秒退避计划，不因重试次数到达上限转为确定失败；UNKNOWN 的原交易与确认检查点继续保留。两者均由持久业务状态恢复，不要求 RabbitMQ 再发送新事件。真实验证入口为 `python3 deploy/scripts/verify-recovery.py`；链失败策略及人工入口见上述 T024，引用感知清理由 T025 实现，完整故障矩阵由 T027 验收。
 
 ## 9. HTTP 接口草案
 
@@ -631,7 +674,7 @@ chain_attempt.phase 采用 PREPARED、SUBMITTING、SUBMITTED、VALID、INVALID�
 | POST /evidence-versions/{id}/verifications | 查询串 source=STORED/COPY；COPY 为 multipart 单个 file，STORED 无正文 | 当前权限校验，返回核验记录及结果 |
 | GET /evidence-versions/{id}/verifications | 分页 | 当前仍有版本权限才返回核验历史 |
 | GET /evidence-versions/{id}/anchor | 无 | 存证状态、首次交易编号、最近失败原因 |
-| POST /evidence-versions/{id}/anchor-retries | reason | OrgB 任务管理员受控重试或重新检查；不绕过未知态确认 |
+| POST /evidence-versions/{id}/anchor-retries | clientRequestId、reason | OrgB 任务管理员且为任务成员；202 接受持久检查意图，不绕过未知态确认 |
 | GET /tasks/{id}/audit-logs | page、pageSize，可选 action/resourceType/traceId | 当前管理、复核或资料审批成员；按真实资源归属限定任务后分页 |
 | GET /tasks/{id}/evidence-relations | page、pageSize，可选 requirementId/executionId | 同上权限；当前页版本及异常、复核、存证、共享和核验摘要 |
 
@@ -678,7 +721,7 @@ chain_attempt.phase 采用 PREPARED、SUBMITTING、SUBMITTED、VALID、INVALID�
 | 下载地址有效期 | 最长 300 秒，并受共享授权剩余期限限制 |
 | Outbox 扫描 / 恢复扫描 | 2 秒 / 10 秒 |
 | 处理租约 / 续租 | 120 秒 / 30 秒；续租、检查点和结果提交均须匹配 lease_token 且 lease_until 大于数据库当前时间，过期后只能重新领取 |
-| 重试 | 按 2、10、30、60、300 秒退避并封顶；明确可重试的失败存证自动最多 10 次后等待人工；上传 VERIFYING 的临时故障持续退避恢复，文件内容错误转 FAILED 后重新上传；UNKNOWN 持续对账，不按次数宣告失败 |
+| 重试 | 按 2、10、30、60、300 秒退避并封顶；每轮最多十次明确可重试冲突失败（含首次），之后等待人工新申请；上传 VERIFYING 的临时故障持续退避恢复，文件内容错误转 FAILED 后重新上传；UNKNOWN 持续对账，不消耗明确冲突预算 |
 | Fabric RPC 时限 | 查询 5 秒、背书 15 秒、提交 10 秒、提交确认 30 秒；超时规则按第 8 节处理 |
 
 开发环境包含 MySQL、Redis、对象存储、RabbitMQ、应用及 Fabric 网络；模拟器连接 HTTP 设备接口。配置区分应用访问地址与返回给浏览器的对象存储地址，不能把仅容器内可解析的地址签发给用户。
@@ -696,6 +739,22 @@ demo 不创建任务或成员，也不伪造已完成状态。账号认证和任
 私钥、密码和真实设备令牌由环境变量或本地挂载提供，不写入代码或日志；对象桶关闭公共访问，应用只按内部生成的键操作文件。
 
 定时回收已过期上传分片和无引用处理对象，清理前重新检查数据库引用及有效租约。合并与核验临时文件在 finally 清理，启动时清扫失去租约的残留；处理前检查可用临时盘空间。
+
+### 10.1 T025 引用感知清理与活动文件保护
+
+清理通过显式 cleanup profile 启用，启动命令为 `python3 deploy/scripts/run-backend.py --cleanup`，可同时使用 --ledger；普通运行方式不启动清理。默认保留时间为 3600 秒，扫描间隔 60 秒、对象批次最多 100。配置来自 CLEANUP_*，数据库、对象存储及临时目录仍复用原有配置，不重建桶、凭据或数据库。
+
+仅识别服务端生成的 upload-parts/{uploadId}/{partNo}/{attemptId} 与 evidence-files/{uploadId}/{leaseToken}，其他前缀、非规范编号和路径穿越形式不参与清理。数据库中的正式版本引用始终保护对应对象；登记分片在退休前也保护原对象。UPLOADING 的全部候选对象受到保护，避免 S3 已写入但登记尚未提交时被删；达到数据库期限后先在父任务锁和会话锁内将其转为 EXPIRED，阻止之后登记，再处理退休分片。
+
+只有超过保留期的 EXPIRED 或 FAILED 会话才能退休其登记分片。退休事务重新核对状态、处理租约及正式引用，将分片删除与清理意图原子提交，不在事务中调用 S3。COMPLETED 的登记分片和正式对象保留；VERIFYING 的登记分片持续保留供业务恢复，不因上传会话原期限已到而停止恢复。最终候选对象若对应当前有效处理 token，也受到保护；其他旧 token 不可能再通过最终写入条件，且没有引用、超过保留期时才可回收。
+
+发现对象后保存 storage_cleanup_task，状态为 PENDING、SENDING、DONE 或 SKIPPED。领取、续租和完成结果使用数据库当前时间及 120 秒任务租约。锁顺序为父任务、上传会话、清理任务；无会话的规范孤立对象不要求外键存在。实际删除前重新检查最新引用与业务处理责任，并用实际 HEAD 元数据复核保留期。HEAD、DELETE 均在数据库事务之外，存储故障保存安全错误码及 2、10、30、60、300 秒退避；结果不明可以重复删除，失去任务租约的旧结果不能覆盖新领取者。已完成意图对应的旧对象若再次出现，重新检查后可再激活，不因一次完成永久漏掉迟到写入。
+
+过期、分片退休和对象清理记录安全审计。清理任务审计只通过其真实 upload_id 与上传会话建立任务归属，无会话的孤立对象记录不进入任何任务历史。普通审计和报告只展示编号、动作、摘要或统计，原始对象键不进入 HTTP、消息和日志。
+
+上传接收、定版和 COPY 核验共用 TemporaryFileManager。每个活动临时文件使用独立 `.lock` 文件持有操作系统锁，覆盖文件 I/O 和需要保留临时内容的业务阶段；使用独立锁文件可避免 SDK 打开、关闭数据文件描述符时影响锁。JVM 内同时预留创建者和清理者路径，跨 JVM 则通过非阻塞文件锁判断活动责任。进程退出释放锁后，启动及定时扫描可回收超过保留期的残留。
+
+临时扫描仅处理应用拥有的私有目录和已知 upload-/finalize-/verification- 文件名；不递归、不跟随符号链接、不删除外来文件。删除使用目录句柄及文件身份、时间和大小复核，活动锁持有者始终跳过。分批扫描保留遍历位置，避免前面的活动或外来文件长期阻挡后续残留；最多保留十六个目录游标，在完成、目录替换、淘汰或关闭时释放。正常退出关闭句柄并清理本次文件；删除暂时失败时记录安全统计，后续扫描重试。空间不足使用不会溢出的余量比较，继续返回依赖不可用或持久业务退避，不将其误记为文件内容错误。验证入口为 `python3 deploy/scripts/verify-cleanup.py`，使用隔离对象清单和私有临时目录，避免验收清理他人的旧对象。
 
 ## 11. 验证与需求追踪
 
@@ -719,3 +778,41 @@ demo 不创建任务或成员，也不伪造已完成状态。账号认证和任
 重点测试领域规则和跨系统失败恢复，不为简单字段映射堆叠测试。压测记录实际环境、文件大小、并发上传量、接口 P95、处理耗时和存证有效确认延迟，并区分 HTTP 接收成功与后台处理完成。
 
 实现过程中若需更改本设计，应同步核对需求及验收条件；开发任务和完成进度由后续任务清单维护。
+
+### 11.1 T026 权限、状态与跨模块并发回归方法
+
+回归入口为 `python3 deploy/scripts/verify-regression.py`。沿用真实 MySQL、对象存储、RabbitMQ 和 Fabric，建立独占账号、任务及上传夹具，使用正式 HTTP 和生产业务处理器生成正常业务结果。测试前后比较原有业务表全部字段及二进制检查点；结束仅删除本轮链外夹具和自有空消息拓扑，已提交的安全审计及链登记继续保留。具体运行结果、失败修正及证据编号在验证记录中维护，本节不预先宣称通过。
+
+成员锁顺序专项入口为 `python3 deploy/scripts/verify-member-locks.py`。两个管理员操作不同任务，在分别持有各自父任务锁后同步开始账号竞争，实际调用 TaskService 与 MySQL，核对两个独立任务均提交、账号按全局顺序加锁、成员集合及每次审计正确；该检查不启动 HTTP、存储、消息或链 Worker，也不新增链登记。它与同任务 HTTP CAS 回归分别记录，不能把不同任务的数据库协议检查算作 HTTP 调用。
+
+竞争写入通过真实 HTTP 并行提交同一资源和相同的 `expectedLockVersion`，核对成功与冲突响应，再查询数据库确认状态、版本号、唯一业务记录和对应审计。复核竞争使用相同的 `expectedReviewStatus=PENDING`；不能只凭两个请求的状态码推断没有覆盖结论或重复写入。
+
+换机、定版及完成的交错通过测试装配中的有界 I/O 门闩控制顺序：在真实文件 I/O 或事务开始前暂停一个调用，让另一操作通过正常接口完成，再释放原调用并检查生产事务的最终判断。门闩不能在持有数据库写锁时等待另一个事务提交。核对内容包括当前执行指针、旧批次归属、最新版本资格、待定版工作对验收的阻挡，以及 COMPLETED 后不能新增正式版本；不通过 SQL 伪造正向成功状态。
+
+权限检查同时覆盖跨机构及同机构非成员的直接 ID 请求和分页列表，以数据库可见记录集合核对 SQL 在计数、分页前的权限过滤。成员撤销后继续使用原 JWT 发起请求，检查当前权限立即生效；若仍持有旧版本的有效共享授权，只能沿该精确版本授权读取，不能访问同资料的新版本、整个任务或任务审计。授权批准、到期与撤销分别核对指定版本、申请人及数据库时间，避免把一个版本的状态扩散到其他版本。
+
+COMPLETED 的业务终态限制不取消已有的历史访问管理：成员维护仍可用于撤销历史访问，符合权限的共享申请、审批及撤销仍可进行；这些操作不能重新打开任务或改写 completedAt。新增上传、定版、换机、异常及复核继续按终态规则拒绝，已有历史在当前权限范围内可读取。
+
+T026 验证权限、状态与跨模块竞争的数据库结果。发送或提交前后崩溃、依赖暂时不可用、响应丢失及应用重启后的持续收敛，仍由 T027 的跨系统故障矩阵执行；受控交错通过不等于完整故障恢复或性能验收通过。
+
+### 11.2 T027 跨系统故障注入与恢复方法
+
+统一入口为 `python3 deploy/scripts/verify-faults.py`，分别调用发送/上传崩溃与 Fabric RPC 崩溃组件，并保留各组件的独立报告。汇总核对各必需故障及恢复检查项，而非仅按登记数量推断通过；同时记录生产类文件及运行依赖的摘要，在运行和 `--resume` 时重验。部分失败时可复用生产实现及依赖未变化的成功组件，避免无目的地重复登记；实现或依赖改变时拒绝复用，不能以旧运行证明新实现。
+
+故障验收区分普通异常、丢弃已取得的真实响应、进程突然退出和依赖不可达。普通异常不能替代进程崩溃；在测试装配的指定 RPC 入口返回 UNAVAILABLE，只证明该调用边界的不可用处理，不表述为共享 Fabric 网络已经停机。已有 T022～T025 的具体证据继续保留，T027 将发送、定版和链调用的持久化边界列入矩阵，逐项记录故障前已提交的状态、故障点、退出码、恢复进程及最终结果，不预先把未运行项标为通过。
+
+| 故障窗口 | 崩溃时必须已存在的持久证据 | 恢复后核对 |
+| --- | --- | --- |
+| Outbox 领取后、真实发送前 | 原 eventId、SENDING、发送 token 及未来租约；真实领取事务已经返回并提交 | 发送租约自然到期后，同 eventId 被重新领取并真实发布；业务版本、存证及成功审计不重复 |
+| 发布确认后、SENT 更新前 | 原事件仍为 SENDING；真实 RabbitMQ 发布确认及自有队列消息证据 | 重发沿用原 eventId；消费者可处理原投递和重复副本，只形成一个业务结果 |
+| 文件候选写入后、版本事务前 | VERIFYING、原处理租约、源分片和实际候选对象；没有提前生成正式版本 | 新进程待原租约到期后用源分片恢复，只生成一个正式版本；无引用旧候选保留给引用感知清理，不能为通过而删除正式引用对象 |
+| 原交易保存后、submit RPC 前 | 原 txId、transaction_bytes、尝试编号及有效处理租约；SUBMITTING 不代表实际已提交 | 新进程复用原交易；不能因查询尚无记录而重新背书或新建尝试 |
+| 真实 submit 返回后、commit 检查点前 | 数据库仍只有原交易检查点；另有不含原始字节的真实提交/回执证据 | 优先查询一致业务登记，或继续恢复原交易；首次登记编号及尝试数保持，不要求补造一个未保存的 commit 检查点 |
+| commit 检查点保存后、确认业务结果前 | 原 txId、transaction_bytes 和 commit_bytes 均已提交保存 | 新进程优先恢复原确认请求；核对原交易实际有效结果及两机构同一业务记录 |
+| 临时链调用失败与响应丢失 | 可恢复状态、next_action_at 和原检查点按实际已知事实保存 | 不确定时保持 UNKNOWN 并按真实数据库时间持续对账；依赖恢复后实际收敛，无伪造 CONFIRMED 或新交易替换旧交易 |
+
+真正的进程退出使用独立 JVM 和预定退出码，在持久事务返回之后或外部 I/O 返回边界触发 halt。测试子类若在自己的事务方法中调用 super 后退出，外层事务仍可能未提交；应委托真实事务代理并确保外层不持有事务，再核对数据库状态后退出。故障子进程退出后，恢复进程保持生产的 120 秒租约及退避规则，等待数据库 UTC 自然到期，不通过 SQL 缩短租约或改写成功状态。
+
+恢复阶段由实际定时发布和业务扫描完成。消息消费者是否启用、上传恢复与独立存证恢复开关分别记录；不能用手动调用处理器的结果冒充默认扫描恢复，也不能把 consumed_event.DONE 当成业务恢复完成。重复消息、已 ACK 的持久重试和未知交易都必须以数据库业务状态核对责任交接。恢复得到一致的有效账本业务登记时，可直接确认首次登记；若崩溃发生在 commit 检查点保存之前，原尝试仍为 SUBMITTING 且 commit_bytes 为空是合法历史，不以伪造 VALID 或补写字节使断言通过。
+
+探针使用独占业务、消息拓扑及私有运行目录。跨进程只保存恢复所需的安全编号、数据库时间、摘要和检查点哈希，不把 JWT、临时账号密码、设备令牌、对象键或原始交易字节写入普通报告。每次失败运行的安全证据独立保留；已有真实链登记和安全审计继续追加，不能用清空账本、清库或重建凭据抹去失败。所有 Worker 与故障子进程停止后再清理自己的链外夹具，并核对原业务全字段及二进制检查点。矩阵结果及运行入口以验证记录为准，M4 须在 T027 所有必需场景验收后通过，M5 的联调、压测和交付仍另行执行。

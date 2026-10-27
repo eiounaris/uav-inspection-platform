@@ -7,7 +7,10 @@ import com.uav.inspection.blockchain.anchor.AnchorTransactions.Claim;
 import com.uav.inspection.blockchain.anchor.persistence.AnchorMapper.AttemptRow;
 import com.uav.inspection.blockchain.anchor.persistence.AnchorMapper.SubmissionRow;
 import com.uav.inspection.identity.ResourcePermissionService;
+import com.uav.inspection.common.lease.ProcessingLeaseKeeper;
+import com.uav.inspection.common.lease.ProcessingLeaseLostException;
 import com.uav.inspection.messaging.MessageEvent;
+import com.uav.inspection.messaging.RetryableDeliveryException;
 import io.grpc.Status;
 import org.hyperledger.fabric.client.EndorseException;
 import org.hyperledger.fabric.protos.peer.TxValidationCode;
@@ -25,6 +28,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -48,6 +53,17 @@ class AnchorProcessorTest {
     private final AttemptRow attempt=attempt("PREPARED",null,null,null);
     private Claim claim;
 
+    @Test
+    void aBusyClaimCannotSilentlyAcknowledgeWorkWithoutACommittedHandoff() {
+        when(phases.claim(EVENT,false)).thenReturn(null);
+        doThrow(new RetryableDeliveryException()).when(phases).verifyAcknowledgement(EVENT);
+        assertThrows(RetryableDeliveryException.class,()->processor().process(EVENT));
+        var order=inOrder(phases);
+        order.verify(phases).claim(EVENT,false);
+        order.verify(phases).verifyAcknowledgement(EVENT);
+        verifyNoInteractions(ledger,owner);
+    }
+
     @BeforeEach
     void setup() throws Exception {
         claim=claim(null);
@@ -56,7 +72,9 @@ class AnchorProcessorTest {
         when(phases.submitting(any(),any())).thenReturn(true);
         when(phases.submitted(any(),any(),any())).thenReturn(true);
         when(phases.outcome(any(),any(),any())).thenReturn(true);
+        when(phases.retryAllowed(any())).thenReturn(true);
         when(phases.confirm(any(),anyString(),anyString())).thenReturn(true);
+        when(phases.checkpoint(any(),any(),anyString(),anyBoolean(),anyString(),anyBoolean())).thenReturn(true);
         when(ledger.queryEvidence("evidence",3)).thenAnswer(call->{ outsideTransaction(); return ABSENT; });
         when(ledger.prepareRegistration("evidence",3,HASH)).thenAnswer(call->{ outsideTransaction(); return prepared; });
         when(ledger.submitPrepared(any())).thenAnswer(call->{ outsideTransaction(); return checkpoint; });
@@ -207,8 +225,9 @@ class AnchorProcessorTest {
     @Test
     void losingTheLeaseBeforeSubmittingStopsTheExternalCall() throws Exception {
         when(phases.submitting(claim,attempt)).thenReturn(false);
-        processor().process(EVENT);
+        assertThrows(ProcessingLeaseLostException.class,()->processor().process(EVENT));
         verify(ledger,never()).submitPrepared(any());
+        verify(phases,never()).verifyAcknowledgement(any());
     }
 
     @Test
@@ -252,6 +271,223 @@ class AnchorProcessorTest {
         verify(ledger,never()).prepareRegistration(anyString(),anyInt(),anyString());
         verify(ledger,never()).submitPrepared(any());
         verify(ledger,never()).queryEvidence(anyString(),anyInt());
+    }
+
+    @Test
+    void failedInitialRenewalPreventsAnyGatewayCallOrAcknowledgement() {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        when(leases.track(any())).thenThrow(new ProcessingLeaseLostException());
+        assertThrows(ProcessingLeaseLostException.class,()->new AnchorProcessor(phases,clients,leases).process(EVENT));
+        verifyNoInteractions(ledger,owner);
+        verify(phases,never()).checkpoint(any(),any(),anyString(),anyBoolean(),anyString(),anyBoolean());
+        verify(phases,never()).verifyAcknowledgement(any());
+    }
+
+    @Test
+    void renewalUsesThisClaimAndTheLeaseScopeClosesAfterASuccessfulTerminalCommit() throws Exception {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        AtomicBoolean completed=new AtomicBoolean();
+        when(leases.track(any())).thenAnswer(call->{
+            assertTrue(((BooleanSupplier)call.getArgument(0)).getAsBoolean());
+            return lease;
+        });
+        when(phases.renew(claim)).thenReturn(true);
+        doAnswer(call->{ if(completed.get()) throw new ProcessingLeaseLostException(); return null; }).when(lease).check();
+        when(ledger.queryEvidence("evidence",3)).thenReturn(MATCH);
+        when(phases.confirm(claim,FIRST_TX,"Org2MSP")).thenAnswer(call->{completed.set(true); return true;});
+        new AnchorProcessor(phases,clients,leases).process(EVENT);
+        var order=inOrder(phases,lease);
+        order.verify(phases).renew(claim);
+        order.verify(phases).confirm(claim,FIRST_TX,"Org2MSP");
+        order.verify(lease).close();
+        order.verify(phases).verifyAcknowledgement(EVENT);
+    }
+
+    @Test
+    void losingRenewalDuringTheInitialQueryCannotPrepareAnotherTransaction() throws Exception {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        AtomicBoolean lost=guard(leases,lease);
+        when(ledger.queryEvidence("evidence",3)).thenAnswer(call->{lost.set(true); return ABSENT;});
+        assertThrows(ProcessingLeaseLostException.class,()->new AnchorProcessor(phases,clients,leases).process(EVENT));
+        verify(ledger,never()).prepareRegistration(anyString(),anyInt(),anyString());
+        verify(phases,never()).checkpoint(any(),any(),anyString(),anyBoolean(),anyString(),anyBoolean());
+        verify(phases,never()).verifyAcknowledgement(any());
+        verify(lease).close();
+    }
+
+    @Test
+    void losingRenewalDuringPreparationDoesNotSaveOrSubmitTheReturnedTransaction() throws Exception {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        AtomicBoolean lost=guard(leases,lease);
+        when(ledger.prepareRegistration("evidence",3,HASH)).thenAnswer(call->{lost.set(true); return prepared;});
+        assertThrows(ProcessingLeaseLostException.class,()->new AnchorProcessor(phases,clients,leases).process(EVENT));
+        verify(phases,never()).prepared(any(),any());
+        verify(ledger,never()).submitPrepared(any());
+        verify(phases,never()).checkpoint(any(),any(),anyString(),anyBoolean(),anyString(),anyBoolean());
+        verify(lease).close();
+    }
+
+    @Test
+    void renewalFailureDuringAnUnavailablePreparationCannotBecomeANormalRetryCheckpoint() throws Exception {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        AtomicBoolean lost=guard(leases,lease);
+        when(ledger.prepareRegistration("evidence",3,HASH)).thenAnswer(call->{
+            lost.set(true); throw Status.UNAVAILABLE.asRuntimeException();
+        });
+        assertThrows(ProcessingLeaseLostException.class,()->new AnchorProcessor(phases,clients,leases).process(EVENT));
+        verify(phases,never()).checkpoint(any(),any(),anyString(),anyBoolean(),anyString(),anyBoolean());
+        verify(phases,never()).verifyAcknowledgement(any());
+        verify(lease).close();
+    }
+
+    @Test
+    void losingRenewalDuringSubmissionRetainsThePreviouslyPreparedAttemptForRecovery() throws Exception {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        AtomicBoolean lost=guard(leases,lease);
+        when(ledger.submitPrepared(any())).thenAnswer(call->{lost.set(true); return checkpoint;});
+        assertThrows(ProcessingLeaseLostException.class,()->new AnchorProcessor(phases,clients,leases).process(EVENT));
+        verify(phases).prepared(claim,prepared);
+        verify(phases).submitting(claim,attempt);
+        verify(phases,never()).submitted(any(),any(),any());
+        verify(ledger,never()).queryCommit(any());
+        verify(phases,never()).checkpoint(any(),any(),anyString(),anyBoolean(),anyString(),anyBoolean());
+        verify(lease).close();
+    }
+
+    @Test
+    void losingRenewalDuringCommitQueryCannotSaveOutcomeOrConfirmTheSubmission() throws Exception {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        AtomicBoolean lost=guard(leases,lease);
+        Claim recovery=claim(attempt("UNKNOWN",COMMIT_BYTES,null,null));
+        when(phases.claim(EVENT,false)).thenReturn(recovery);
+        when(ledger.queryCommit(any())).thenAnswer(call->{lost.set(true); return new CommitOutcome(TX,true,0,42);});
+        assertThrows(ProcessingLeaseLostException.class,()->new AnchorProcessor(phases,clients,leases).process(EVENT));
+        verify(phases,never()).outcome(any(),any(),any());
+        verify(ledger,never()).queryEvidence(anyString(),anyInt());
+        verify(phases,never()).confirm(any(),anyString(),anyString());
+        verify(phases,never()).checkpoint(any(),any(),anyString(),anyBoolean(),anyString(),anyBoolean());
+        verify(lease).close();
+    }
+
+    @Test
+    void aConditionalCheckpointMissCannotFallThroughToAcknowledgement() throws Exception {
+        when(ledger.queryEvidence("evidence",3)).thenThrow(Status.UNAVAILABLE.asRuntimeException());
+        when(phases.checkpoint(any(),any(),anyString(),anyBoolean(),anyString(),anyBoolean())).thenReturn(false);
+        assertThrows(ProcessingLeaseLostException.class,()->processor().process(EVENT));
+        verify(phases,never()).verifyAcknowledgement(any());
+    }
+
+    @Test
+    void aLeaseLossExceptionCannotBeReclassifiedAsALedgerOutage() throws Exception {
+        when(ledger.queryEvidence("evidence",3)).thenThrow(new ProcessingLeaseLostException());
+        assertThrows(ProcessingLeaseLostException.class,()->processor().process(EVENT));
+        verify(phases,never()).checkpoint(any(),any(),anyString(),anyBoolean(),anyString(),anyBoolean());
+        verify(phases,never()).verifyAcknowledgement(any());
+    }
+
+    @Test
+    void anUncertainDatabaseCommitClosesHeartbeatWithoutCreatingAFakeCheckpoint() throws Exception {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        guard(leases,lease);
+        when(phases.prepared(claim,prepared)).thenThrow(new TransactionSystemException("Unknown commit result"));
+        assertThrows(TransactionSystemException.class,()->new AnchorProcessor(phases,clients,leases).process(EVENT));
+        verify(lease).close();
+        verify(phases,never()).checkpoint(any(),any(),anyString(),anyBoolean(),anyString(),anyBoolean());
+        verify(phases,never()).verifyAcknowledgement(any());
+    }
+
+    @Test
+    void aKnownConflictCanPrepareANewAttemptOnlyAfterTheBusinessRecordIsStillAbsent() throws Exception {
+        Claim retry=claim(attempt("INVALID",COMMIT_BYTES,TxValidationCode.MVCC_READ_CONFLICT_VALUE,42L));
+        when(phases.claim(EVENT,false)).thenReturn(retry);
+        when(phases.prepared(retry,prepared)).thenReturn(attempt);
+        when(ledger.queryEvidence("evidence",3)).thenReturn(ABSENT,MATCH);
+        processor().process(EVENT);
+        var order=inOrder(ledger,phases);
+        order.verify(ledger).queryEvidence("evidence",3);
+        order.verify(phases).retryAllowed(retry);
+        order.verify(ledger).prepareRegistration("evidence",3,HASH);
+        order.verify(phases).prepared(retry,prepared);
+        verify(phases).confirm(retry,FIRST_TX,"Org2MSP");
+    }
+
+    @Test
+    void anExhaustedKnownConflictCannotPrepareANewTransactionEvenFromUnknownBusinessState() throws Exception {
+        Claim retry=claim(attempt("INVALID",COMMIT_BYTES,TxValidationCode.PHANTOM_READ_CONFLICT_VALUE,42L));
+        when(phases.claim(EVENT,false)).thenReturn(retry);
+        when(phases.retryAllowed(retry)).thenReturn(false);
+        processor().process(EVENT);
+        verify(phases).checkpoint(retry,retry.attempt(),"FAILED",true,"COMMIT_CONFLICT",false);
+        verify(ledger,never()).prepareRegistration(anyString(),anyInt(),anyString());
+        verify(ledger,never()).submitPrepared(any());
+    }
+
+    @Test
+    void aPreviouslyValidCommitWithAnAbsentRecordRemainsUnknownWithoutCreatingAnotherAttempt() throws Exception {
+        Claim valid=claim(attempt("VALID",COMMIT_BYTES,0,42L));
+        when(phases.claim(EVENT,false)).thenReturn(valid);
+        processor().process(EVENT);
+        verify(phases).checkpoint(valid,valid.attempt(),"UNKNOWN",true,"LEDGER_RECORD_NOT_VISIBLE",false);
+        verify(ledger,never()).prepareRegistration(anyString(),anyInt(),anyString());
+        verify(ledger,never()).submitPrepared(any());
+        verify(phases,never()).retryAllowed(any());
+    }
+
+    @Test
+    void aPersistedDuplicateTransactionOutcomeRequiresTheBusinessRecordBeforeAnyNewAttempt() throws Exception {
+        Claim duplicate=claim(attempt("INVALID",COMMIT_BYTES,TxValidationCode.DUPLICATE_TXID_VALUE,42L));
+        when(phases.claim(EVENT,false)).thenReturn(duplicate);
+        processor().process(EVENT);
+        verify(phases).checkpoint(duplicate,duplicate.attempt(),"UNKNOWN",true,"DUPLICATE_TX_AWAITING_RECORD",false);
+        verify(ledger,never()).prepareRegistration(anyString(),anyInt(),anyString());
+        verify(ledger,never()).submitPrepared(any());
+        verify(phases,never()).retryAllowed(any());
+    }
+
+    @Test
+    void aNonAllowlistedInvalidCommitIsPermanentWhenNoMatchingBusinessRecordExists() throws Exception {
+        Claim rejected=claim(attempt("INVALID",COMMIT_BYTES,TxValidationCode.ENDORSEMENT_POLICY_FAILURE_VALUE,42L));
+        when(phases.claim(EVENT,false)).thenReturn(rejected);
+        processor().process(EVENT);
+        verify(phases).checkpoint(rejected,rejected.attempt(),"FAILED",false,"COMMIT_INVALID",false);
+        verify(ledger,never()).prepareRegistration(anyString(),anyInt(),anyString());
+        verify(ledger,never()).submitPrepared(any());
+    }
+
+    @Test
+    void definiteQueryPermissionDenialBeforeSubmissionIsNotAutomaticallyRetried() throws Exception {
+        when(ledger.queryEvidence("evidence",3)).thenThrow(Status.PERMISSION_DENIED.asRuntimeException());
+        processor().process(EVENT);
+        verify(phases).checkpoint(claim,null,"FAILED",false,"LEDGER_FORBIDDEN",false);
+        verify(ledger,never()).prepareRegistration(anyString(),anyInt(),anyString());
+        verify(ledger,never()).submitPrepared(any());
+    }
+
+    @Test
+    void aPermissionDeniedQueryCannotPretendAPossiblySubmittedOriginalTransactionWasRejected() throws Exception {
+        Claim unknown=claim(attempt("UNKNOWN",COMMIT_BYTES,null,null));
+        when(phases.due()).thenReturn(List.of(EVENT));
+        when(phases.claim(EVENT,true)).thenReturn(unknown);
+        when(ledger.queryCommit(any())).thenThrow(Status.UNAVAILABLE.asRuntimeException());
+        when(ledger.queryEvidence("evidence",3)).thenThrow(Status.PERMISSION_DENIED.asRuntimeException());
+        processor().recoverDue();
+        verify(phases).checkpoint(unknown,unknown.attempt(),"UNKNOWN",true,"LEDGER_QUERY_UNAVAILABLE",true);
+        verify(ledger,never()).prepareRegistration(anyString(),anyInt(),anyString());
+        verify(ledger,never()).submitPrepared(any());
+    }
+
+    private static AtomicBoolean guard(ProcessingLeaseKeeper leases,ProcessingLeaseKeeper.Lease lease) {
+        AtomicBoolean lost=new AtomicBoolean();
+        when(leases.track(any())).thenReturn(lease);
+        doAnswer(call->{if(lost.get()) throw new ProcessingLeaseLostException(); return null;}).when(lease).check();
+        return lost;
     }
 
     private AnchorProcessor processor() {

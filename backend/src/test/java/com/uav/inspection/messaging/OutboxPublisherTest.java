@@ -13,6 +13,8 @@ import org.springframework.mock.env.MockEnvironment;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.util.Set;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -38,6 +40,9 @@ class OutboxPublisherTest {
                         new MessageEvent(ID, MessageEvent.FILE_FINALIZE_REQUESTED, BIZ, "test-trace")),
                 "33000000-0000-4000-8000-000000000001", 1);
         when(transactions.claim()).thenReturn(delivery, (OutboxTransactions.Delivery) null);
+        when(transactions.sent(any())).thenReturn(true);
+        when(transactions.retry(any(),anyString())).thenReturn(true);
+        when(transactions.failed(any(),anyString())).thenReturn(true);
     }
 
     @Test
@@ -102,5 +107,78 @@ class OutboxPublisherTest {
         doThrow(new DataAccessResourceFailureException("unavailable")).when(transactions).sent(delivery);
         assertThrows(DataAccessResourceFailureException.class, publisher::publishBatch);
         verify(transactions, never()).retry(any(), anyString());
+    }
+
+    @Test
+    void payloadIdentityMustMatchAllIndependentDurableIdentityColumns() {
+        for(var tampered:List.of(
+                new OutboxTransactions.Delivery("11000000-0000-4000-8000-000000000099",MessageEvent.FILE_FINALIZE_REQUESTED,BIZ,delivery.payload(),delivery.token(),1),
+                new OutboxTransactions.Delivery(ID,MessageEvent.EVIDENCE_ANCHOR_REQUESTED,BIZ,delivery.payload(),delivery.token(),1),
+                new OutboxTransactions.Delivery(ID,MessageEvent.FILE_FINALIZE_REQUESTED,"22000000-0000-4000-8000-000000000099",delivery.payload(),delivery.token(),1))) {
+            when(transactions.claim()).thenReturn(tampered,(OutboxTransactions.Delivery)null);
+            publisher.publishBatch();
+            verify(transactions).failed(tampered,"INVALID_ENVELOPE");
+        }
+        verifyNoInteractions(rabbit);
+        verify(transactions,never()).sent(any()); verify(transactions,never()).retry(any(),anyString());
+    }
+
+    @Test
+    void invalidJsonUnknownFieldsDuplicatesTrailingDataAndOversizedBodiesFailPermanently() {
+        String valid=delivery.payload();
+        for(String payload:List.of("{",valid.substring(0,valid.length()-1)+",\"unknown\":\"value\"}",
+                valid.substring(0,valid.length()-1)+",\"traceId\":\"test-trace\"}",valid+" {}"," ".repeat(4097))) {
+            var invalid=new OutboxTransactions.Delivery(ID,MessageEvent.FILE_FINALIZE_REQUESTED,BIZ,payload,delivery.token(),1);
+            when(transactions.claim()).thenReturn(invalid,(OutboxTransactions.Delivery)null);
+            publisher.publishBatch();
+            verify(transactions).failed(invalid,"INVALID_ENVELOPE");
+        }
+        verifyNoInteractions(rabbit);
+        verify(transactions,never()).sent(any()); verify(transactions,never()).retry(any(),anyString());
+    }
+
+    @Test
+    void expiredSendingLeaseCannotBeClaimedAsSuccessfullySentOrRewrittenAsARetry() {
+        when(transactions.sent(delivery)).thenReturn(false);
+        when(transactions.claim()).thenReturn(delivery,delivery,(OutboxTransactions.Delivery)null);
+        doAnswer(call->{call.<CorrelationData>getArgument(3).getFuture().complete(new CorrelationData.Confirm(true,null)); return null;})
+                .when(rabbit).send(anyString(),anyString(),any(Message.class),any(CorrelationData.class));
+
+        publisher.publishBatch();
+
+        verify(transactions).sent(delivery); verify(transactions).claim();
+        verify(transactions,never()).retry(any(),anyString()); verify(transactions,never()).failed(any(),anyString());
+    }
+
+    @Test
+    void aRetryAfterLostConfirmPublishesTheSameEventIdWithANewSendingToken() {
+        var retry=new OutboxTransactions.Delivery(ID,delivery.eventType(),BIZ,delivery.payload(),"33000000-0000-4000-8000-000000000002",2);
+        when(transactions.claim()).thenReturn(delivery,retry,(OutboxTransactions.Delivery)null);
+        List<String> correlations=new ArrayList<>(),messageIds=new ArrayList<>();
+        doAnswer(call->{
+            Message message=call.getArgument(2); CorrelationData correlation=call.getArgument(3);
+            assertArrayEquals(delivery.payload().getBytes(java.nio.charset.StandardCharsets.UTF_8),message.getBody());
+            messageIds.add(message.getMessageProperties().getMessageId()); correlations.add(correlation.getId());
+            if(messageIds.size()==1) correlation.getFuture().completeExceptionally(new TimeoutException());
+            else correlation.getFuture().complete(new CorrelationData.Confirm(true,null));
+            return null;
+        }).when(rabbit).send(anyString(),anyString(),any(Message.class),any(CorrelationData.class));
+
+        publisher.publishBatch();
+
+        assertEquals(List.of(ID,ID),messageIds); assertNotEquals(correlations.get(0),correlations.get(1));
+        verify(transactions).retry(delivery,"PUBLISH_UNCONFIRMED"); verify(transactions).sent(retry);
+    }
+
+    @Test
+    void interruptedConfirmationKeepsTheInterruptAndSavesOnlyTheRetryCheckpoint() {
+        doAnswer(call->{Thread.currentThread().interrupt(); return null;})
+                .when(rabbit).send(anyString(),anyString(),any(Message.class),any(CorrelationData.class));
+        try {
+            publisher.publishBatch();
+            assertTrue(Thread.currentThread().isInterrupted());
+            verify(transactions).retry(delivery,"PUBLISH_INTERRUPTED");
+            verify(transactions,never()).sent(any());
+        } finally { Thread.interrupted(); }
     }
 }

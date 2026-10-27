@@ -31,7 +31,7 @@ def backend_environment():
     environment = dict(os.environ)
     # Copy only backend settings, without unrelated service secrets.
     for key, value in values.items():
-        if key.startswith(("DB_", "S3_", "UPLOAD_", "VERIFICATION_", "RABBITMQ_", "MESSAGING_", "FABRIC_", "REDIS_", "DEVICE_")) or key in ("DEMO_CREDENTIALS_PATH", "JWT_SECRET"):
+        if key.startswith(("DB_", "S3_", "UPLOAD_", "VERIFICATION_", "RABBITMQ_", "MESSAGING_", "FABRIC_", "REDIS_", "DEVICE_", "CLEANUP_")) or key in ("DEMO_CREDENTIALS_PATH", "JWT_SECRET"):
             environment.setdefault(key, value)
     if not environment.get("DB_PASSWORD"):
         raise RuntimeError("DB_PASSWORD is required in process env or the local .env file")

@@ -36,6 +36,13 @@ public interface AuditQueryMapper {
             UNION ALL
             SELECT
             """+FIELDS+"""
+            u.task_id,v.id,u.subtask_id,u.execution_id
+            FROM audit_log a JOIN storage_cleanup_task c ON a.resource_type='CLEANUP_TASK' AND a.resource_id=c.id
+                JOIN upload_session u ON u.id=c.upload_id
+                LEFT JOIN evidence_version v ON v.upload_session_id=u.id WHERE u.task_id=#{taskId}
+            UNION ALL
+            SELECT
+            """+FIELDS+"""
             v.task_id,v.id,v.subtask_id,v.execution_id
             FROM audit_log a JOIN evidence_version v ON a.resource_type='EVIDENCE_VERSION' AND a.resource_id=v.id
             WHERE v.task_id=#{taskId}

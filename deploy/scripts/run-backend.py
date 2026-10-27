@@ -14,6 +14,7 @@ def main():
     parser.add_argument("--profile", choices=("local", "prod"), default="local")
     parser.add_argument("--demo", action="store_true", help="Initialize local demo accounts and one device")
     parser.add_argument("--ledger", action="store_true", help="Enable real Fabric business anchoring")
+    parser.add_argument("--cleanup", action="store_true", help="Enable reference-aware object and temporary file cleanup")
     args = parser.parse_args()
     if args.demo and args.profile != "local":
         parser.error("--demo is only available with --profile local")
@@ -29,6 +30,8 @@ def main():
     profiles = args.profile + ",database,storage,messaging" + (",demo" if args.demo else "")
     if args.ledger:
         profiles += ",ledger"
+    if args.cleanup:
+        profiles += ",cleanup"
     os.chdir(ROOT)
     os.execve(java, [java, "-jar", str(jar), "--spring.profiles.active=" + profiles], environment)
 

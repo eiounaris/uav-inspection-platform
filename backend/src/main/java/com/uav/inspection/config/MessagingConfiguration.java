@@ -4,6 +4,7 @@ import com.uav.inspection.evidence.finalization.FinalizationProcessor;
 import com.uav.inspection.blockchain.anchor.AnchorProcessor;
 import com.uav.inspection.messaging.AnchorMessageListener;
 import com.uav.inspection.messaging.FinalizationMessageListener;
+import com.uav.inspection.messaging.MessageRejectionRecorder;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Declarables;
@@ -77,14 +78,14 @@ public class MessagingConfiguration {
 
     @Bean
     SimpleMessageListenerContainer finalizationContainer(CachingConnectionFactory connection,
-            FinalizationProcessor processor, Environment environment, RabbitAdmin admin) {
+            FinalizationProcessor processor, MessageRejectionRecorder rejections, Environment environment, RabbitAdmin admin) {
         var container = new SimpleMessageListenerContainer(connection);
         container.setQueueNames(required(environment, "finalize-queue"));
         container.setAcknowledgeMode(AcknowledgeMode.MANUAL);
         container.setPrefetchCount(1);
         container.setConcurrentConsumers(1);
-        container.setRecoveryInterval(5000);
-        container.setMessageListener(new FinalizationMessageListener(processor));
+        container.setRecoveryInterval(5000); // Startup failure recovery; delivery failures pause before aborting.
+        container.setMessageListener(new FinalizationMessageListener(processor, rejections));
         container.setErrorHandler(failure -> org.slf4j.LoggerFactory.getLogger(MessagingConfiguration.class)
                 .warn("Messaging consumer recovery required: {}", failure.getClass().getSimpleName()));
         return container;
@@ -103,14 +104,14 @@ public class MessagingConfiguration {
     @Bean
     @Profile("ledger")
     SimpleMessageListenerContainer anchorContainer(CachingConnectionFactory connection,
-            AnchorProcessor processor, Environment environment, RabbitAdmin admin) {
+            AnchorProcessor processor, MessageRejectionRecorder rejections, Environment environment, RabbitAdmin admin) {
         var container = new SimpleMessageListenerContainer(connection);
         container.setQueueNames(required(environment, "anchor-queue"));
         container.setAcknowledgeMode(AcknowledgeMode.MANUAL);
         container.setPrefetchCount(1);
         container.setConcurrentConsumers(1);
-        container.setRecoveryInterval(5000);
-        container.setMessageListener(new AnchorMessageListener(processor));
+        container.setRecoveryInterval(5000); // Startup failure recovery; delivery failures pause before aborting.
+        container.setMessageListener(new AnchorMessageListener(processor, rejections));
         container.setErrorHandler(failure -> org.slf4j.LoggerFactory.getLogger(MessagingConfiguration.class)
                 .warn("Anchor consumer recovery required: {}", failure.getClass().getSimpleName()));
         return container;

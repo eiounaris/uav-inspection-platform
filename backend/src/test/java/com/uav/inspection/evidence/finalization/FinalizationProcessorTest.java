@@ -2,12 +2,16 @@ package com.uav.inspection.evidence.finalization;
 
 import com.uav.inspection.common.error.BusinessException;
 import com.uav.inspection.common.error.ErrorCode;
+import com.uav.inspection.common.lease.ProcessingLeaseKeeper;
+import com.uav.inspection.common.lease.ProcessingLeaseLostException;
+import com.uav.inspection.common.temp.TemporaryFileManager;
 import com.uav.inspection.evidence.finalization.FinalizationTransactions.Claim;
 import com.uav.inspection.evidence.storage.ObjectStorage;
 import com.uav.inspection.evidence.storage.UploadSettings;
 import com.uav.inspection.evidence.upload.persistence.UploadMapper.PartRow;
 import com.uav.inspection.evidence.upload.persistence.UploadMapper.SessionRow;
 import com.uav.inspection.messaging.MessageEvent;
+import com.uav.inspection.messaging.RetryableDeliveryException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,6 +32,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -39,6 +45,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -54,6 +61,18 @@ class FinalizationProcessorTest {
     private UploadSettings settings;
     private byte[] image;
     private Claim claim;
+
+    @Test
+    void aBusyClaimStillChecksDurableHandoffBeforeReturningToTheListener() {
+        when(phases.claim(EVENT,false)).thenReturn(null);
+        doThrow(new RetryableDeliveryException()).when(phases).verifyAcknowledgement(EVENT);
+        assertThrows(RetryableDeliveryException.class,
+                ()->new FinalizationProcessor(phases,storage,settings).process(EVENT));
+        var order=inOrder(phases);
+        order.verify(phases).claim(EVENT,false);
+        order.verify(phases).verifyAcknowledgement(EVENT);
+        verifyNoInteractions(storage);
+    }
 
     @BeforeEach
     void configure() throws Exception {
@@ -76,6 +95,43 @@ class FinalizationProcessorTest {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             return new ByteArrayInputStream(image);
         });
+    }
+
+    @Test
+    void anUnattainableFreeSpaceFloorSchedulesRetryBeforeAnyFileOrObjectIo() throws Exception {
+        settings=new UploadSettings(new MockEnvironment()
+                .withProperty("inspection.upload.max-file-size","1048576")
+                .withProperty("inspection.upload.part-size","1048576")
+                .withProperty("inspection.upload.session-ttl-seconds","3600")
+                .withProperty("inspection.upload.min-free-space",Long.toString(Long.MAX_VALUE))
+                .withProperty("inspection.upload.allowed-extensions","png")
+                .withProperty("inspection.upload.temp-directory",directory.resolve("space").toString()));
+        var temporary=mock(TemporaryFileManager.class);
+        new FinalizationProcessor(phases,storage,settings,ProcessingLeaseKeeper.unmonitored(),temporary).process(EVENT);
+        verify(phases).checkpoint(claim,false,"LOCAL_SPACE_UNAVAILABLE");
+        verify(phases,never()).finish(any(),anyString(),anyLong(),anyString());
+        verifyNoInteractions(storage,temporary);
+        try(var entries=Files.list(settings.tempDirectory())) { assertEquals(0,entries.count()); }
+    }
+
+    @Test
+    void theManagedTemporaryLeaseRemainsHeldUntilTheFinalDatabasePhaseReturns() throws Exception {
+        AtomicReference<Path> temporary=new AtomicReference<>();
+        doAnswer(call->{
+            Path file=call.getArgument(1);temporary.set(file);
+            Files.setLastModifiedTime(file,FileTime.from(Instant.now().minusSeconds(7200)));
+            return null;
+        }).when(storage).put(anyString(),any(Path.class),anyString());
+        when(phases.finish(eq(claim),anyString(),eq((long)image.length),anyString())).thenAnswer(call->{
+            var sweep=new TemporaryFileManager().sweep(settings.tempDirectory(),Duration.ofSeconds(60),100);
+            assertTrue(sweep.locked()>0);assertEquals(0,sweep.deleted());
+            assertArrayEquals(image,Files.readAllBytes(temporary.get()));
+            return true;
+        });
+        new FinalizationProcessor(phases,storage,settings,ProcessingLeaseKeeper.unmonitored(),new TemporaryFileManager())
+                .process(EVENT);
+        assertFalse(Files.exists(temporary.get()));
+        try(var entries=Files.list(settings.tempDirectory())) { assertEquals(0,entries.count()); }
     }
 
     @Test
@@ -284,6 +340,86 @@ class FinalizationProcessorTest {
         processor().recoverDue();
         verify(phases).claim(EVENT,true);
         verify(phases).finish(eq(claim),anyString(),eq((long)image.length),anyString());
+    }
+
+    @Test
+    void productionLeaseStartsAfterClaimAndStaysOpenThroughTheFinalCommit() {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        when(phases.renew(claim)).thenReturn(true);
+        when(leases.track(any())).thenAnswer(call->{
+            assertTrue(call.getArgument(0,BooleanSupplier.class).getAsBoolean()); return lease;
+        });
+
+        new FinalizationProcessor(phases,storage,settings,leases).process(EVENT);
+
+        var order=inOrder(phases,leases,lease,storage);
+        order.verify(phases).claim(EVENT,false);
+        order.verify(leases).track(any());
+        order.verify(phases).renew(claim);
+        order.verify(storage).open("private-part");
+        order.verify(storage).put(anyString(),any(),anyString());
+        order.verify(phases).finish(eq(claim),anyString(),eq((long)image.length),anyString());
+        order.verify(lease).close();
+        order.verify(phases).verifyAcknowledgement(EVENT);
+    }
+
+    @Test
+    void leaseLossDuringAReadPreventsAnyCheckpointFinalObjectOrDoneAcknowledgement() throws Exception {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        when(leases.track(any())).thenReturn(lease);
+        when(storage.open("private-part")).thenAnswer(call->{
+            doThrow(new ProcessingLeaseLostException()).when(lease).check();
+            return new ByteArrayInputStream(image);
+        });
+
+        assertThrows(ProcessingLeaseLostException.class,
+                ()->new FinalizationProcessor(phases,storage,settings,leases).process(EVENT));
+
+        verify(phases,never()).checkpoint(any(),anyBoolean(),anyString());
+        verify(phases,never()).finish(any(),anyString(),anyLong(),anyString());
+        verify(phases,never()).verifyAcknowledgement(any());
+        verify(storage,never()).put(anyString(),any(),anyString());
+        verify(lease).close();
+        assertEmptyTemporaryDirectory();
+    }
+
+    @Test
+    void leaseLossAfterObjectWritePreservesTheCandidateWithoutPublishingAFixedVersion() throws Exception {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        when(leases.track(any())).thenReturn(lease);
+        doAnswer(call->{ doThrow(new ProcessingLeaseLostException()).when(lease).check(); return null; })
+                .when(storage).put(anyString(),any(),anyString());
+
+        assertThrows(ProcessingLeaseLostException.class,
+                ()->new FinalizationProcessor(phases,storage,settings,leases).process(EVENT));
+
+        verify(phases,never()).checkpoint(any(),anyBoolean(),anyString());
+        verify(phases,never()).finish(any(),anyString(),anyLong(),anyString());
+        verify(storage,never()).delete(anyString());
+        verify(lease).close();
+        assertEmptyTemporaryDirectory();
+    }
+
+    @Test
+    void aStorageExceptionAfterLeaseLossCannotWriteANormalRetryPlan() throws Exception {
+        ProcessingLeaseKeeper leases=mock(ProcessingLeaseKeeper.class);
+        ProcessingLeaseKeeper.Lease lease=mock(ProcessingLeaseKeeper.Lease.class);
+        when(leases.track(any())).thenReturn(lease);
+        when(storage.open("private-part")).thenAnswer(call->{
+            doThrow(new ProcessingLeaseLostException()).when(lease).check();
+            throw new BusinessException(ErrorCode.DEPENDENCY_UNAVAILABLE);
+        });
+
+        assertThrows(ProcessingLeaseLostException.class,
+                ()->new FinalizationProcessor(phases,storage,settings,leases).process(EVENT));
+
+        verify(phases,never()).checkpoint(any(),anyBoolean(),anyString());
+        verify(phases,never()).finish(any(),anyString(),anyLong(),anyString());
+        verify(lease).close();
+        assertEmptyTemporaryDirectory();
     }
 
     private FinalizationProcessor processor() {

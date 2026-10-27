@@ -5,6 +5,7 @@ import com.uav.inspection.blockchain.EvidenceLedgerClient.EvidenceRecord;
 import com.uav.inspection.blockchain.InstitutionLedgerClients;
 import com.uav.inspection.common.error.BusinessException;
 import com.uav.inspection.common.error.ErrorCode;
+import com.uav.inspection.common.temp.TemporaryFileManager;
 import com.uav.inspection.evidence.storage.ObjectStorage;
 import com.uav.inspection.evidence.verification.VerificationModels.*;
 import com.uav.inspection.evidence.verification.VerificationTransactions.Prepared;
@@ -12,7 +13,7 @@ import com.uav.inspection.identity.CurrentUser;
 import com.uav.inspection.identity.ResourcePermissionService;
 import jakarta.annotation.PreDestroy;
 import org.hyperledger.fabric.client.GatewayException;
-import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -21,8 +22,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -43,13 +42,22 @@ public class VerificationService implements AutoCloseable {
     private final ObjectStorage storage;
     private final InstitutionLedgerClients clients;
     private final VerificationSettings settings;
+    private final TemporaryFileManager temporaryFiles;
     private final ThreadPoolExecutor workers;
     private final ThreadPoolExecutor closers;
     private final Set<Guard> active=ConcurrentHashMap.newKeySet();
 
     public VerificationService(VerificationTransactions transactions,ObjectStorage storage,
                                InstitutionLedgerClients clients,VerificationSettings settings) {
+        this(transactions,storage,clients,settings,new TemporaryFileManager());
+    }
+
+    @Autowired
+    public VerificationService(VerificationTransactions transactions,ObjectStorage storage,
+                               InstitutionLedgerClients clients,VerificationSettings settings,
+                               TemporaryFileManager temporaryFiles) {
         this.transactions=transactions; this.storage=storage; this.clients=clients; this.settings=settings;
+        this.temporaryFiles=temporaryFiles;
         workers=executor(settings.concurrency(),"inspection-verification-");
         closers=executor(settings.concurrency(),"inspection-verification-close-");
     }
@@ -116,19 +124,19 @@ public class VerificationService implements AutoCloseable {
 
     private Computed compute(Prepared prepared,Copy copy,Guard guard) {
         FileDigest digest;
-        Path temporary=null;
+        TemporaryFileManager.Handle temporary=null;
         try {
             guard.check();
             if(copy!=null) {
-                if(Files.getFileStore(settings.tempDirectory()).getUsableSpace()<Math.addExact(copy.size(),settings.minFreeSpace()))
+                long usable=Files.getFileStore(settings.tempDirectory()).getUsableSpace();
+                if(usable<settings.minFreeSpace() || copy.size()>usable-settings.minFreeSpace())
                     return Computed.fileFailure("LOCAL_SPACE_UNAVAILABLE");
-                temporary=Files.createTempFile(settings.tempDirectory(),"verification-",".tmp",
-                        PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+                temporary=temporaryFiles.create(settings.tempDirectory(),"verification-",".tmp");
             }
             try(InputStream input=guard.track(copy==null?storage.open(prepared.version().objectKey()):copy.input().open())) {
                 guard.check();
                 if(copy==null) digest=hash(input,null,null,guard);
-                else try(OutputStream output=Files.newOutputStream(temporary)) { digest=hash(input,output,copy,guard); }
+                else try(OutputStream output=Files.newOutputStream(temporary.path())) { digest=hash(input,output,copy,guard); }
             } finally { guard.stream.set(null); }
         } catch(Cancelled ignored) {
             return Computed.fileFailure("FILE_PROCESSING_TIMEOUT");
@@ -137,11 +145,7 @@ public class VerificationService implements AutoCloseable {
                     && (business.errorCode()==ErrorCode.INVALID_ARGUMENT || business.errorCode()==ErrorCode.FILE_TOO_LARGE)) throw business;
             return Computed.fileFailure(copy==null?"STORED_FILE_READ_FAILED":"COPY_FILE_READ_FAILED");
         } finally {
-            if(temporary!=null) {
-                try { Files.deleteIfExists(temporary); }
-                catch(IOException failure) { LoggerFactory.getLogger(VerificationService.class)
-                        .warn("Verification temporary cleanup failed: {}",failure.getClass().getSimpleName()); }
-            }
+            if(temporary!=null) temporary.close();
         }
         guard.completedDigest.set(digest);
         guard.querying.set(true);

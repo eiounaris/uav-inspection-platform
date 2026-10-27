@@ -1,6 +1,6 @@
 # 后端工程
 
-Spring Boot 4.1.1、Java 21、Maven 单工程。已实现 HTTP 基础能力、Gateway 适配、MySQL/MyBatis/Flyway、用户认证、T009 任务与初始执行，以及 T010 私有对象存储、持久上传会话与分片幂等；T011 已接入完整文件校验、异步定版和 RabbitMQ Outbox。T012 已接入真实 Fabric 存证消费、二进制交易检查点与 UNKNOWN 恢复；T013 已接入存储文件与上传副本的实际字节核验及核验历史；T014 可保留、可重查的最小真实闭环演示已验收通过，M2 已通过；T015 设备管理、独立设备身份、心跳进度及设备上传已验收通过，T016 集群模拟、CAS 换机与历史批次隔离已通过真实验收；T017 多分片续传与独立版本归档也已通过，T018 固定版本异常与人工复核也已通过真实验收，T019 正式提交验收与任务完成已通过真实 Fabric 确认验收，T020 精确版本共享与受控下载也已通过真实验收，T021 审计查询与证据关系整合已通过真实验收，M3 业务补齐通过；下一项为 M4 的 T022 Outbox、消费幂等与死信完善。实际证据见验证记录。
+Spring Boot 4.1.1、Java 21、Maven 单工程。已实现 HTTP 基础能力、Gateway 适配、MySQL/MyBatis/Flyway、用户认证、T009 任务与初始执行，以及 T010 私有对象存储、持久上传会话与分片幂等；T011 已接入完整文件校验、异步定版和 RabbitMQ Outbox。T012 已接入真实 Fabric 存证消费、二进制交易检查点与 UNKNOWN 恢复；T013 已接入存储文件与上传副本的实际字节核验及核验历史；T014 可保留、可重查的最小真实闭环演示已验收通过，M2 已通过；T015 设备管理、独立设备身份、心跳进度及设备上传已验收通过，T016 集群模拟、CAS 换机与历史批次隔离已通过真实验收；T017 多分片续传与独立版本归档也已通过，T018 固定版本异常与人工复核也已通过真实验收，T019 正式提交验收与任务完成已通过真实 Fabric 确认验收，T020 精确版本共享与受控下载也已通过真实验收，T021 审计查询与证据关系整合已通过真实验收，M3 业务补齐通过；T022 Outbox、消费幂等与安全死信已通过真实故障验收。T023 处理续租和有界业务恢复扫描已通过真实验收。T024 明确失败预算及人工重新检查、T025 引用感知对象清理和跨 JVM 临时文件恢复均已通过真实验收；T026 权限、状态与跨模块并发回归也已通过并修复成员更新死锁；T027 六个真实崩溃窗口及默认恢复也已通过，M4 可靠性完善通过；下一项 T028，进入 M5 联调与交付。实际证据见验证记录。
 
 ## 构建与运行
 
@@ -31,13 +31,13 @@ mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-p
 python3 deploy/scripts/run-backend.py --demo
 ```
 
-最后一个命令启动实际 Web 后端，Ctrl+C 停止。启动器默认启用 local,database,storage,messaging；--demo 再加入 demo，--profile prod 则使用 prod,database,storage,messaging，不能与 --demo 合用。启动器显式读取已有 .env 中的 DB_*、S3_*、UPLOAD_*、RABBITMQ_*、MESSAGING_*、JWT_SECRET 及 DEMO_CREDENTIALS_PATH，通过进程环境传给 Java，不执行 .env 中的 shell 表达式。首次环境准备见 [部署说明](../deploy/README.md)；继续开发时沿用原 .env 和演示凭据，不重新生成或覆盖它们，缺少的新配置按 .env.example 在本地补齐。
+最后一个命令启动实际 Web 后端，Ctrl+C 停止。启动器默认启用 local,database,storage,messaging；--demo 再加入 demo，--profile prod 则使用 prod,database,storage,messaging，不能与 --demo 合用。`--cleanup` 显式追加清理 profile，普通 local/prod 启动均不自动启用清理。启动器显式读取已有 .env 中的 DB_*、S3_*、UPLOAD_*、VERIFICATION_*、CLEANUP_*、RABBITMQ_*、MESSAGING_*、JWT_SECRET 及 DEMO_CREDENTIALS_PATH，通过进程环境传给 Java，不执行 .env 中的 shell 表达式。首次环境准备见 [部署说明](../deploy/README.md)；继续开发时沿用原 .env 和演示凭据，不重新生成或覆盖它们，缺少的新配置按 .env.example 在本地补齐。
 
 storage 需要显式提供 S3_ENDPOINT、S3_ACCESS_KEY、S3_SECRET_KEY，使用 T003 已配置的 Garage 私有桶。移除 --demo 只关闭演示初始化，仍启用存储和消息处理。若只验证数据库、认证和任务，可自行提供 DB_*、JWT_SECRET 等进程环境，使用 `SPRING_PROFILES_ACTIVE=local,database java -jar backend/target/inspection-backend-0.1.0.jar`；此组合不创建 S3 客户端，也不提供上传接口。直接运行 JAR 不会自动读取 .env。
 
 database profile 启用 Hikari、MyBatis 与 Flyway。连接会话使用 UTC 和 READ COMMITTED，Connector/J 默认 sslMode=REQUIRED；生产部署可通过 DB_SSL_MODE 配置更严格的证书校验。普通 local/prod 启动不启用 database 时排除这些自动配置，原 HTTP/Gateway 探针可独立运行。MyBatis SQL 参数日志关闭，local-cache-scope=STATEMENT，锁后权限与成员关系重查不会复用同事务中较早的 SESSION 缓存。
 
-首版迁移 V1__identity_and_task_scope.sql 建立 organization、app_user、inspection_task、task_member、drone 五张表，并创建两个固定机构。roles JSON、机构角色白名单、唯一用户名、创建人机构、设备摘要及外键由数据库约束；username 区分大小写。T008 新增 V2__identity_audit.sql 建立 audit_log；T009 新增 V3__task_execution_scope.sql 建立 inspection_subtask、material_requirement、task_execution。V3 的复合外键限制资料项与子任务属于同一任务、currentExecutionId 属于当前子任务，并以唯一约束限制一个子任务只有一个 READY/RUNNING 批次。T010 新增 V4__upload_sessions_and_versions.sql，建立 upload_session、upload_part、evidence_version；复合外键固定资料项、证据编号、任务、子任务和执行作用域，唯一约束保证主体请求键、分片号和未来版本号不重复。T010 当时不插入 evidence_version；T011 的 V5__finalization_outbox_and_submission.sql 新增 outbox_event、consumed_event、chain_submission，提供事件派发、消费回执和待存证状态。T012 追加 V6__chain_attempts.sql，建立 chain_attempt 保存原 Fabric 交易与确认请求检查点；T013 追加 V7__verification_records.sql，建立 verification_record 保存实际摘要、链上摘要、核验来源、结果及原因；T015 追加 V8__device_reports.sql，建立设备事件去重与执行归属约束；T016 追加 V9__execution_adjustments.sql，保存换机前后批次、操作者、原因及数据库时间，T018 追加 V10__issues_and_reviews.sql，建立固定版本异常 issue 与唯一结论 review_record；T020 追加 V11__version_access_grants.sql，新增精确版本共享 access_grant；V1～V10 历史迁移保持不变。Flyway 校验开启，自动 baseline 和 clean 关闭，不使用 schema.sql/data.sql；后续结构变化继续追加迁移。
+首版迁移 V1__identity_and_task_scope.sql 建立 organization、app_user、inspection_task、task_member、drone 五张表，并创建两个固定机构。roles JSON、机构角色白名单、唯一用户名、创建人机构、设备摘要及外键由数据库约束；username 区分大小写。T008 新增 V2__identity_audit.sql 建立 audit_log；T009 新增 V3__task_execution_scope.sql 建立 inspection_subtask、material_requirement、task_execution。V3 的复合外键限制资料项与子任务属于同一任务、currentExecutionId 属于当前子任务，并以唯一约束限制一个子任务只有一个 READY/RUNNING 批次。T010 新增 V4__upload_sessions_and_versions.sql，建立 upload_session、upload_part、evidence_version；复合外键固定资料项、证据编号、任务、子任务和执行作用域，唯一约束保证主体请求键、分片号和未来版本号不重复。T010 当时不插入 evidence_version；T011 的 V5__finalization_outbox_and_submission.sql 新增 outbox_event、consumed_event、chain_submission，提供事件派发、消费回执和待存证状态。T012 追加 V6__chain_attempts.sql，建立 chain_attempt 保存原 Fabric 交易与确认请求检查点；T013 追加 V7__verification_records.sql，建立 verification_record 保存实际摘要、链上摘要、核验来源、结果及原因；T015 追加 V8__device_reports.sql，建立设备事件去重与执行归属约束；T016 追加 V9__execution_adjustments.sql，保存换机前后批次、操作者、原因及数据库时间，T018 追加 V10__issues_and_reviews.sql，建立固定版本异常 issue 与唯一结论 review_record；T020 追加 V11__version_access_grants.sql，新增精确版本共享 access_grant；T022 追加 V12__durable_message_rejections.sql，扩展 Outbox 的 FAILED 约束并新增安全拒收记录 message_rejection；T024 追加 V13__anchor_retry_requests.sql，仅新增人工重新检查申请表 anchor_retry_request，V1～V12 历史迁移及旧表列保持不变。Flyway 校验开启，自动 baseline 和 clean 关闭，不使用 schema.sql/data.sql；后续结构变化继续追加迁移。
 
 demo 必须同时包含 local、database，任何包含 prod 的组合都会被应用自身拒绝。初始化在一个事务中创建以下账号与一台 UAV-DEMO-001，不预造任务、成员、文件或成功状态：
 
@@ -54,7 +54,7 @@ demo 必须同时包含 local、database，任何包含 prod 的组合都会被�
 
 T007 当时的真实验证使用数据库探针三个独立进程：migrate 不启用 demo；seed 初始化并核对 Mapper 结果；verify 再次启动，比较五张表全部字段的摘要及凭据文件，执行 24 项约束拒绝检查和 UTC 时间往返。所有临时任务、成员及字段修改均回滚，验证后为 2 个机构、6 个用户、0 个任务/成员和 1 台设备。JVM 使用 Asia/Shanghai，固定毫秒时间仍按 UTC 保存和读取。
 
-数据库探针现已支持 V1～V11，比较十一版迁移校验和及二十一张业务表完整快照，包含 206 项真实约束检查及完成状态 CAS、UTC 往返；探针写入均回滚。最新成功报告由 .local/database-probe/latest.json 指向，T007 的 24 项约束及五表历史证据继续保留在 [验证记录](../docs/verification.md)。需要再次检查时执行 `python3 deploy/scripts/verify-database.py`。探针要求当前演示基线，后续业务数据变化时需更新相应验收用例。后端测试和显式真实探针分别执行，普通 Maven 构建不自动连接 MySQL、S3 或提交链交易。
+数据库探针现已支持 V1～V14，比较十四版迁移校验和及二十四张业务表完整快照，包含 248 项真实约束检查及完成状态 CAS、拒收去重、明确冲突预算、人工申请、清理任务租约/重试和 UTC 往返；探针写入均回滚，实际 S3 删除由独立清理探针验证。最新成功报告由 .local/database-probe/latest.json 指向，T007 的 24 项约束及五表历史证据继续保留在 [验证记录](../docs/verification.md)。需要再次检查时执行 `python3 deploy/scripts/verify-database.py`。探针要求当前演示基线，后续业务数据变化时需更新相应验收用例。后端测试和显式真实探针分别执行，普通 Maven 构建不自动连接 MySQL、S3 或提交链交易。
 
 ## 用户认证与角色管理（T008）
 
@@ -153,9 +153,9 @@ python3 deploy/scripts/verify-tasks.py
 
 S3 客户端固定使用 AWS SDK 2.56.0、UrlConnectionHttpClient，默认采用 path style。请求和响应 checksum 策略均设为 WHEN_REQUIRED，以兼容 Garage；应用自己计算并持久化每片 SHA-256。客户端通过 RequestBody.fromFile 重开稳定文件，重试不依赖已消费的流。S3_ENDPOINT、S3_ACCESS_KEY、S3_SECRET_KEY 必须显式提供；S3_REGION 默认 garage，S3_BUCKET 默认 uav-evidence，S3_FORCE_PATH_STYLE 默认 true。上传限制通过 UPLOAD_MAX_FILE_SIZE、UPLOAD_PART_SIZE、UPLOAD_SESSION_TTL_SECONDS、UPLOAD_ALLOWED_EXTENSIONS 配置；临时目录默认 `.local/uploads/tmp`，可用 UPLOAD_TEMP_DIRECTORY 和 UPLOAD_MIN_FREE_SPACE 调整目录及最低剩余空间。
 
-HTTP 接收分片时使用 0600 临时文件，按长度上限流式读取、计数和计算摘要；S3 网络写入在数据库事务外进行，每个候选对象使用独立服务端键。短事务重新验证作用域并提交分片引用，已确认未引用的候选对象删除。数据库提交结果不明时保留对象，避免删掉可能已提交的引用；孤儿扫描与故障恢复在 T025 完善。私有桶不开放匿名读取，上传响应和审计不返回 objectKey、私钥、S3 凭据或 JWT；对象存储故障统一返回 503。
+HTTP 接收分片时使用 0600 临时文件，按长度上限流式读取、计数和计算摘要；S3 网络写入在数据库事务外进行，每个候选对象使用独立服务端键。短事务重新验证作用域并提交分片引用，已确认未引用的候选对象删除。数据库提交结果不明时保留对象，避免删掉可能已提交的引用；孤儿扫描与引用保护由下述 T025 实现。私有桶不开放匿名读取，上传响应和审计不返回 objectKey、私钥、S3 凭据或 JWT；对象存储故障统一返回 503。
 
-完成所有分片后仍为 UPLOADING，versionId=null；调用下文 T011 完成接口后进入异步校验和定版。仅启用 database,storage 可继续使用 T010 会话与分片接口；完成接口及 Worker 还需要 messaging。T016 已实现历史批次隔离，T017 多分片与版本归档已验收通过，孤立对象清理与完整恢复在 T025 等后续任务完善；单片上传到真实核验的闭环见下文 T014。
+完成所有分片后仍为 UPLOADING，versionId=null；调用下文 T011 完成接口后进入异步校验和定版。仅启用 database,storage 可继续使用 T010 会话与分片接口；完成接口及 Worker 还需要 messaging。T016 已实现历史批次隔离，T017 多分片与版本归档已验收通过，孤立对象清理由下述 T025 实现，完整故障矩阵由 T027 验收；单片上传到真实核验的闭环见下文 T014。
 
 手动执行 [examples/t010.http](../examples/t010.http)，其中使用 [79 字节示例 PNG](../examples/files/inspection-sample.png)。先运行 [examples/t009.http](../examples/t009.http) 创建并启动真实任务，再按上传示例为 operator-user 加入任务成员；保留 operator-admin 及委托方成员。真实密码和令牌只保存在本地忽略提交的 REST Client 环境中。MySQL、Garage 私有桶和原 .env 已就绪、JDK 21 已选择后，可执行：
 
@@ -176,9 +176,9 @@ python3 deploy/scripts/verify-upload.py
 
 最终短事务重新核对任务状态和租约，锁定资料项并分配 versionNo，同时写入固定 evidence_version、PENDING chain_submission、EVIDENCE_ANCHOR_REQUESTED Outbox、成功审计，将会话改为 COMPLETED 并写 DONE 回执；ACK 随后执行。该事务任一步失败都会回滚数据库结果。固定版本保留用户来源、长度、完整摘要和私有对象引用；重复完成或消息重投不会新增版本。当前批次产生新版本时，WAITING_ACCEPTANCE 任务重新进入 RUNNING。
 
-内容校验失败进入 FAILED，不创建版本或存证记录，修正文件后应创建新上传会话。对象存储或本地 I/O 暂时失败保持 VERIFYING，事务保存 retryCount、nextActionAt、安全错误码和 DONE 回执，再 ACK；独立扫描器读取这些持久检查点重试，延迟为 2、10、30、60、300 秒。数据库未能提交结果或检查点时不 ACK，消费者关闭通道，容器恢复后重投。格式错误的消息拒绝并进入持久死信队列 inspection.dead，避免立即重排形成空转。
+内容校验失败进入 FAILED，不创建版本或存证记录，修正文件后应创建新上传会话。对象存储或本地 I/O 暂时失败保持 VERIFYING，事务保存 retryCount、nextActionAt、安全错误码和 DONE 回执，再 ACK；独立扫描器读取这些持久检查点重试，延迟为 2、10、30、60、300 秒。数据库未能提交结果或检查点时不 ACK；T022 进一步要求明确持久 handoff，事务外固定退避 5 秒后关闭通道重投。格式错误消息在安全拒收元数据提交后进入持久死信队列 inspection.dead，详情见 T022。
 
-GET 上传进度在 COMPLETED 时返回 versionId，其余状态为 null。COMPLETED 表示固定文件版本生成；仅运行 T011 的 database,storage,messaging 组合时，anchor 消息保留在队列中，chain_submission 仍为 PENDING；增加 ledger profile 后启用下文 T012 真实存证消费者。租约续期、完整恢复矩阵和引用感知孤儿清理分别在 T023、T027、T025 完善；当前提交结果不明时保留最终候选对象。
+GET 上传进度在 COMPLETED 时返回 versionId，其余状态为 null。COMPLETED 表示固定文件版本生成；仅运行 T011 的 database,storage,messaging 组合时，anchor 消息保留在队列中，chain_submission 仍为 PENDING；增加 ledger profile 后启用下文 T012 真实存证消费者。T023 的处理租约续期及有界恢复扫描已通过验收；完整恢复矩阵由 T027 验收，引用感知孤儿清理见下述 T025。当前提交结果不明时保留最终候选对象。
 
 RabbitMQ 使用已有 .env 中的 RABBITMQ_HOST、RABBITMQ_PORT、RABBITMQ_USERNAME、RABBITMQ_PASSWORD。messaging profile 的拓扑、派发和恢复间隔可由 .env.example 中的 MESSAGING_* 参数配置；默认派发间隔 1 秒、恢复扫描 10 秒。database 或 database,storage 单独运行不连接 RabbitMQ，也不启动本节 Worker。手动流程见 [examples/t011.http](../examples/t011.http)：沿用 T010 的 uploadId，完成后轮询 processingStatus 与 versionId。
 
@@ -209,7 +209,7 @@ EVIDENCE_ANCHOR_REQUESTED 的 bizId 定位 chain_submission，消费者领取数
 
 确认先使用原 commitBytes 查询提交结果，再读取链上固定记录核对，得到可证明结果后将 chain_submission 改为 CONFIRMED。confirmedTxId 保留链上首次登记的 registeredTxId，confirmedBy 是记录中的提交 MSP。仅收到消息、发布确认或调用 submitPrepared 成功都不会直接表示存证成功。已存在相同业务记录时可复用首次结果，重复事件不会重新创建一次登记尝试。
 
-提交或确认响应丢失时进入 UNKNOWN，保留 txId、transactionBytes、已有 commitBytes 和 nextActionAt。消费者只在结果或持久重试检查点提交后 ACK；独立恢复扫描器读取 UNKNOWN/SUBMITTED 等记录，有 commitBytes 优先恢复原确认请求，没有时恢复原交易并查询链上结果，不因超时创建新交易号。确定的 MVCC/幻读冲突可按策略重试，权限拒绝、摘要冲突、检查点不匹配等进入不可自动重试分支。完整故障矩阵、续租及业务补偿仍在 T023、T024、T027 继续验收。
+提交或确认响应丢失时进入 UNKNOWN，保留 txId、transactionBytes、已有 commitBytes 和 nextActionAt。消费者只在结果或持久重试检查点提交后 ACK；独立恢复扫描器读取 UNKNOWN/SUBMITTED 等记录，有 commitBytes 优先恢复原确认请求，没有时恢复原交易并查询链上结果，不因超时创建新交易号。确定的 MVCC/幻读冲突可按策略重试，权限拒绝、摘要冲突、检查点不匹配等进入不可自动重试分支。T023 的续租及恢复扫描、T024 的明确失败预算及人工重新检查均已通过验收，完整跨系统故障矩阵继续由 T027 验证。
 
 新增两个只读接口，在 database 模式即可查询已经持久化的结果，统一使用 Bearer 令牌与 `/api/v1` 前缀：
 
@@ -383,7 +383,7 @@ curl -i -H 'X-Trace-Id: t002-demo-001' http://127.0.0.1:8080/api/v1/system/statu
 | `sharing` | 已实现精确版本申请、审批/撤销 CAS、期限鉴权、安全元数据分页及短期下载签发 |
 | `blockchain` | 已提供两机构 Gateway、存证消费、MySQL 二进制尝试检查点、原交易恢复及版本/存证状态读取 |
 | `audit` | 追加成功审计、按多态资源确定任务归属的权限分页与精确过滤 |
-| `messaging` | 已实现 Outbox 租约派发、Confirm + mandatory Return、manual ACK、消费幂等、基础重试扫描及持久死信 |
+| `messaging` | 已实现 Outbox 租约派发、Confirm + mandatory Return、manual ACK、消费幂等、处理续租、有界业务恢复扫描及持久死信 |
 
 预留包不含模拟业务实现。MyBatis Starter 4.0.0、Flyway 12.4.0、Connector/J 9.7.0 和 MySQL 8.4.11 已通过 T007；对象存储使用固定 AWS SDK 2.56.0，RabbitMQ 适配使用 Spring Rabbit 4.1.1；缓存客户端随对应任务接入。Spring Boot 父 POM 固定为 4.1.1；Gateway 固定为 1.13.0，gRPC BOM 1.84.0 与 Protobuf BOM 4.36.2 显式管理。默认启动没有 Fabric Bean，也不会读取链身份或连接网络。
 
@@ -590,4 +590,207 @@ python3 deploy/scripts/verify-audit.py
 
 最终运行保留 63 条审计和两个真实 CONFIRMED 链记录，区块 25/26；清理本次 2 个任务、7 个账号、1 台设备、4 个上传会话、6 个私有对象和 1 个 presence key，原二十一表（含原 27 条核验）、BLOB 和凭据保持。首轮报告 `.local/audit-probe/20261025T070335Z-c199b8d7/report.json` 曾在 98 次 HTTP、693 项检查后因探针 JDBC UTC 类型处理过窄失败；只修正测试 oracle 的 LocalDateTime→UTC 与元数据查询，生产代码未变，首轮原数据/夹具清理也通过。首轮已经提交的区块 23/24 同样追加保留，因此本轮合计保留四条真实链记录，不重建或回退账本。
 
-M3 的 T015～T021 已全部完成；下一步 T022 进入 M4，继续完善 Outbox、消费幂等和死信。完整故障矩阵、性能测试、部署复现及完整 MVP 仍按后续任务执行。
+M3 的 T015～T021 已全部完成；下文 T022 已通过 Outbox、消费幂等和安全死信验收，T023 也已通过处理续租及业务恢复验收；T024 的失败预算及人工重新检查、T025 的引用感知清理也已通过验收，T026 的权限及跨模块并发回归见下文。完整故障矩阵、性能测试、部署复现及完整 MVP 仍按后续任务执行。
+
+## 消息派发、消费回执与安全死信（T022）
+
+T022 已通过真实故障验收。V12__durable_message_rejections.sql 在原 V1～V11 之外追加迁移：Outbox 增加不可自动重试的 FAILED；新增 message_rejection，业务快照扩展为二十二表，原历史迁移不改写。
+
+发布器领取事件时重新检查数据库时间、状态和发送租约。只有当前未到期 token 能保存 SENT、PENDING 重试或 FAILED；旧 token 的 CAS 返回无变更，不覆盖后来的发送者。真实 mandatory Return、NACK、未确认与中断均保留原 eventId 重试。严格 UTF-8、四个字符串字段、重复字段、尾随 JSON 以及独立持久 eventType/bizId 的一致性检查失败时，以 INVALID_ENVELOPE 永久 FAILED，不反复领取或发送。
+
+两个生产监听器使用相同的严格信封规则；可选 messageId 存在时必须与 eventId 相同。拒绝格式错误、类型不符、未知持久事件或 messageId 不符的投递前，独立事务先提交 message_rejection 的 consumer、正文 SHA-256、大小、固定原因码及可选规范 UUID；同 consumer、同正文只保留首次元数据。表与日志不保存正文、任意头或异常详情；私有 broker 死信队列仍保留原投递正文。提交成功后才 basicReject(requeue=false)，由真实 broker 送入持久死信队列；提交失败则不 ACK、不拒绝，在数据库事务之外固定等待 5 秒，再关闭通道让消息重新投递。该运行时退避不依赖容器 recoveryInterval。
+
+正常业务 ACK 也要求已提交证据：COMPLETED/FAILED 等终态，或无活动租约且包含明确下一次执行时间的持久重试计划和 DONE 回执。claim 返回空并不自动代表处理完成；仍由其他 Worker 持有活动租约、未保存检查点或丢失租约时，原消息继续保持未确认。prefetch=1、默认消费者并发=1 保持不变，网络和对象 I/O 在数据库事务外进行。
+
+沿用真实基础设施、原 .env、原演示凭据和现有普通 User1 身份，停止其他项目后台实例及消费者后执行：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+python3 deploy/scripts/verify-messaging.py
+```
+
+探针先通过正式 HTTP 建任务、上传并冻结，不用 SQL 构造正常成功状态。第一个独立 JVM 先制造实际 mandatory UNROUTABLE、按数据库退避重发，在真实 Publisher Confirm 到达后、SENT 更新前故意 halt(73)；第二个 JVM 自然等待未修改的生产 120 秒发送租约，验证并发领取只有一个新 owner、过期及旧 token 均不能保存结果，再以原 eventId 实际重发。因此会有两份投递，数据库仍只创建一个固定版本、一条存证和一个真实 Fabric 尝试。
+
+恢复阶段还覆盖：claim 事务前注入数据库访问异常时保持 unacked 并延迟重投；真实 S3 读取失败后先保存 VERIFYING 重试计划再 ACK；真实恢复 Worker 持有 S3 I/O latch 和活动租约时，重复消息不能被提前 ACK；解除阻塞后实际定版并获得真实 CONFIRMED；重复投递文件与存证事件仍保留首笔交易。两个消费者都检查无效 UTF-8、多余及重复字段、错误类型、未知持久事件、messageId 不符和尾随 JSON 等安全人工负例；拒收事务前注入访问异常时不会提前进入 DLQ，恢复后去重落库并实际死信。注入不关闭共享数据库；Publisher NACK、未确认和 checkpoint 提交失败的确定性分支由单测覆盖，不将真实 mandatory Return 当作实际磁盘故障 NACK。
+
+脚本默认约需 3～4 分钟，发送租约不通过 SQL 提前到期。报告、两个 JVM 日志和安全 checkpoint 位于 `.local/messaging-probe/<runId>/`（目录 0700、文件 0600），总结果为 verify.json；临时测试密码另存 credentials.json（0600），恢复清理后删除，JWT 仅在内存。若已完成预定 halt，但恢复进程尚未启动时外部中断，可执行 `python3 deploy/scripts/verify-messaging.py --recover .local/messaging-probe/REPLACE_HALTED_RUN`。
+
+结束只清理自己的测试账号、任务、对象、业务消息与拒收行，逐条核对后 ACK 自有测试死信，仅删除已空且无消费者的独占队列/交换机；二十二表全部原字段和 BLOB、原凭据及原 M2 数据均比较保留。追加审计和实际 Fabric 记录保留，链网络、共享队列和服务不重置。HTTP 复现入口和阶段含义见 [examples/t022.http](../examples/t022.http)；本轮不代替 T023 的续租或 T027 的完整故障恢复矩阵。
+
+本轮最终 clean verify **384 项测试**、数据库 **220 项真实约束**通过，V12 checksum=`1723908793`。双 JVM 报告 `.local/messaging-probe/20261025T155232Z-95251a9d/verify.json` 为 PASS：**19 次业务 HTTP、1248 项检查**，默认发送租约 120 秒，恢复进程实际等待剩余 111843 毫秒；claim 与拒收失败的实际重投间隔分别为 5025、5014 毫秒。16 次重复投递仍只创建一个版本和一个首次 Fabric 尝试；两个坏 Outbox 永久 FAILED，17 条去重拒收记录对应 19 次实际死信投递。检查项数包含 broker 管理轮询，不作为独立测试数或性能指标。
+
+最终运行保留 19 条审计和区块 28 的真实 VALID/code=0 登记，清理本次 1 个任务、3 个账号、1 台设备、1 个上传会话、2 个对象及 17 条拒收记录；临时测试凭据已删除，独占拓扑及原二十二表、BLOB、原凭据保留检查通过。首轮 `.local/messaging-probe/20261025T154417Z-4c6b2b05/report.json` 因探针将 RabbitMQ 管理指标的采样延迟当作即时状态而失败，仅修正探针等待和断言，生产代码未变；该轮已提交的区块 27 同样保留。因此本轮两次运行合计追加两条链登记，不回退账本。T022 完成；下文 T023 的处理续租及恢复扫描也已通过验收，M4 尚未完成。
+
+
+## 处理续租与业务恢复扫描（T023）
+
+T023 已通过真实验收：425 项后端测试、220 项数据库约束及双 JVM 恢复探针通过。继续使用 V1～V12 的二十二张业务表，不新增 V13，不重写已有迁移或原业务行。下述默认 120 秒处理租约、30 秒续租间隔与 Outbox 的发送租约分别管理。
+
+文件定版和存证处理共用 ProcessingLeaseKeeper。领取事务提交后先执行一次短续租事务，再由独立的两个固定心跳线程每 30 秒续租；单进程最多登记 64 个活动保护器，不为每个任务创建线程。续租先锁父任务，再锁业务行，只允许原 token、尚未到期且仍可处理的状态，将期限延至数据库 UTC 当前时间后 120 秒；过期 Worker 必须重新领取，旧 token 不能复活。续租不修改 DONE、重试次数或业务结果。
+
+处理器在文件读取、格式验证、对象写入和 Gateway 调用前后，以及保存检查点或结果前检查租约保护。续租条件更新未命中、数据库异常、保护器停止或线程中断会使当前 Worker 停止推进，不将其误归为普通存储或链故障并写入新的重试计划。保护器还以每次成功续租开始时的单调时间计算保守的本地 120 秒期限；最终写入仍由数据库 token、状态及有效期约束。
+
+已经发出的阻塞 I/O 可能不能立即取消；返回后重新检查保护器，失去租约的结果不能创建版本、更新消费回执或推进下一次链调用。最终对象写入后结果不明时保留候选对象，由 T025 按引用处理。终态或持久恢复计划提交后直接关闭保护器、取消心跳并释放容量，不再追加一次租约检查，避免已清空租约的成功事务被并发心跳误报。
+
+默认每 10 秒触发的两个恢复入口沿用原启用开关。BusinessRecoveryDispatcher 以两个固定恢复线程执行工作，不设置排队容量，每类业务最多运行一个批次；忙时由下一次扫描继续，定时线程不承担对象或 Gateway I/O，续租线程也不受恢复 I/O 阻塞。每批选择最多十条到期业务；DurableRecovery 逐条恢复持久 traceId，单条异常不影响同批其他条目，中断后停止选择和领取新工作。应用关闭先中断恢复工作，再停止其依赖的续租器与数据库。
+
+消息消费与业务扫描调用同一处理器，扫描按业务状态直接领取，显式绕过 consumed_event.DONE。VERIFYING 的临时 I/O 故障持续采用 2、10、30、60、300 秒退避，不因次数到达上限变为文件内容错误；UNKNOWN 继续保留原 transactionBytes、commitBytes 和首次交易编号，由原交易恢复路径对账，不要求 RabbitMQ 重新投递事件。
+
+选择 JDK 21，沿用原 .env、演示凭据、私有对象桶、消息服务及普通 User1 身份，停止其他项目后端或业务探针后执行：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+python3 deploy/scripts/verify-database.py
+python3 deploy/scripts/verify-recovery.py
+```
+
+恢复探针使用两个独立 JVM、专属业务夹具及随机 RabbitMQ 拓扑。真实 Garage 读取超过原 120 秒期限，期间观察默认 30 秒心跳，竞争者不能领取仍有效的租约；指定续租 SQL 前注入一次数据访问异常，旧 Worker 返回后不保存结果。持久化文件重试计划及 UNKNOWN 原交易检查点后，第一 JVM 以预定的 halt(73) 退出；第二 JVM 使用默认定时业务扫描恢复，DONE 不会短路业务。探针等待生产默认租约自然到期，不通过 SQL 提前修改期限，也未停止共享数据库。
+
+报告和私有日志位于 `.local/recovery-probe/<runId>/`，使用目录 0700、文件 0600；复现和现有业务接口观察见 [t023.http](../examples/t023.http)。测试只清理自己的链外夹具和空消息拓扑，已提交的审计及真实链登记继续追加保留。T023 已完成，链失败策略和人工重新检查见下述 T024；T025 的引用感知清理见下文；T027 的完整故障矩阵待后续完成，M4 尚未通过。
+
+
+本轮最终 `.local/t023-build-final.log` 的 JDK 21 clean verify **425 项测试**通过，失败、错误和跳过均为 0；数据库回归 **220 项真实约束**通过，测试写入回滚，V1～V12 校验和保持。双 JVM 汇总 `.local/recovery-probe/20261026T011916Z-128f9416/verify.json` 为 PASS：第一 JVM **20 次业务 HTTP/151 项检查**，第二 JVM **6 次业务 HTTP/121 项检查**，合计 **26 次业务 HTTP/272 项检查**。检查数包含真实依赖状态和 SQL 断言，不作为独立单测数或性能指标；本次完整实际探针一次通过。
+
+真实对象读取持续 **122980 毫秒**，超过最初 120 秒处理期限；文件续租成功 5 次，包含初始续租及 4 次定时心跳，存证续租成功 2 次，包含初始续租及 1 次定时心跳。一次续租访问异常使旧文件 Worker 停止写入；第二 JVM 在启动 Spring 前自然等待剩余 **82327 毫秒**，先证明原业务仍非终态时，过期旧 token 已不能续租、检查点或定版，再启用默认恢复任务。
+
+第二 JVM 暂停自己的两个 MQ 消费者，以默认 10 秒扫描间隔独立恢复业务，实际等待 **22810 毫秒**后三个版本全部 CONFIRMED；文件重试与存证 UNKNOWN 均由扫描绕过已有 DONE 恢复。原第一版本继续使用同一 txId、transactionBytes 和 commitBytes，没有创建第二个尝试；两机构及原 commit 再查询均为 VALID/code=0。新增三条真实登记的 evidenceId 均为 `27bf8a56-db70-4ea2-9a90-87152eff6996`：
+
+| 版本 | 首次交易编号 | 区块号 |
+| --- | --- | --- |
+| 1 | `d56e460c543b16449737f25bc74371eef7b48981eb67990f510e86a9e31e953c` | 29 |
+| 2 | `2bdef08b0fd93aacacc41054d478bd88fc7086f49fc82e35e6cd418930921a99` | 30 |
+| 3 | `6a8297c0186842eedc227200a03f08e44b2f85cdea6850b6a9878b0d98cf348b` | 31 |
+
+清理本次 1 个任务、3 个账号、1 台设备、3 个上传会话、6 个私有对象及关联链外夹具，临时凭据文件和独占消息拓扑已删除；保留 30 条安全审计和区块 29～31 的三条真实登记。原二十二表全部字段/BLOB、.env 和演示凭据保持。旧自动流水线回归也通过 **42 次 HTTP/404 项检查**，该回归不启用 ledger，没有新增链登记。各项报告及最终 JAR 兼容性复查见 [验证记录](../docs/verification.md)。
+
+
+## Fabric 未知态、失败预算与人工重新检查（T024）
+
+T024 已通过真实业务验收。V13__anchor_retry_requests.sql 仅新增 anchor_retry_request，保存申请人、规范 clientRequestId、请求摘要、原因、新 dispatch_no、原最大 attempt_no 基线和对应事件编号；既有十二版迁移、旧表列、业务及交易字节保持。V13 实际 Flyway checksum 为 `-1202069766`，业务快照扩展为二十三表。
+
+明确失败预算独立于业务 retry_count：只计本轮 baseline_attempt_no 之后，phase=INVALID 且验证码为 MVCC_READ_CONFLICT/PHANTOM_READ_CONFLICT（11/12）的交易尝试。每轮最多十次这类失败，**包含首次明确失败**；达到上限后 FAILED 保留 retryable=true、next_action_at=null，等待人工开启下一轮。它不表示额外十次自动重试。retry_count 保留累计检查点次数及退避用途，在整数上限饱和，不因人工申请清零；查询、确认及背书前暂时不可用不消耗明确失败预算，UNKNOWN 持续对账。
+
+有 commitBytes 时优先恢复原确认请求；没有时查询原业务键，再使用原 transactionBytes/txId 受控恢复提交。查询不存在不能证明原交易无效，UNKNOWN 不因检查次数过多而重新背书。只有已明确 INVALID、属于两种允许重试的冲突、业务记录尚不存在且本轮仍有预算时，才追加新尝试；旧交易和首次有效登记编号保留。明确登记权限拒绝、摘要冲突为不可重试 FAILED；交易可能已提交后的确认查询权限或配置错误仍保留 UNKNOWN 及检查点，不能把查询失败解释为原交易无效。
+
+人工接口仅在完整 `database,storage,messaging,ledger` 组合下提供：
+
+```http
+POST /api/v1/evidence-versions/{id}/anchor-retries
+Content-Type: application/json
+Authorization: Bearer <本机任务管理员 JWT>
+
+{"clientRequestId":"<规范 UUID>","reason":"重新检查原因"}
+```
+
+只有当前 OrgB 的 OPERATOR_TASK_ADMIN 且仍为该任务成员可以申请，单独 ORG_ADMIN、操作员、OrgA 管理员及版本共享授权均不赋予此操作权限。每次包括幂等重放都在父任务锁后重新认证当前账号；未知或无权访问的版本返回 403。请求原因必填、最多 1000 字符，空白文本拒绝；请求编号为规范 UUID。
+
+成功返回 **202** 和 `id/submissionId/versionId/eventId/dispatchNo/acceptedAt` 安全回执，只表示新检查意图已持久化，不调用 Gateway，也不改变已知链结果。同一存证、申请人及 clientRequestId 的相同规范化原因重放返回原回执，没有新事件或审计；内容不同返回 409 IDEMPOTENCY_CONFLICT。原请求之后已经确认或任务已经完成时，只要当前权限仍有效，重放也仍返回原回执。
+
+新申请要求任务未完成、存证不是 CONFIRMED 或不可重试 FAILED、没有任何处理租约、最新事件已有 DONE 回执。尚待处理的意图、忙 Worker、已到期但仍需扫描接管的租约都返回 409，不通过人工入口清除处理责任。父任务、当前账号、版本及存证按固定顺序加锁，新 dispatch 的四字段 Outbox、申请记录、恢复计划与 EVIDENCE_ANCHOR_RECHECK_REQUESTED 审计同事务提交。原因保存在受控申请表，不写进事件、回执或审计文本；失败重试不删除、重新编号或覆盖旧尝试。
+
+扫描选择当前存证最大的 dispatch_no，领取事务还在父任务锁下重新核对事件编号，避免人工申请提交前选出的旧扫描结果继续处理。消息及扫描都沿用 T023 的默认 120 秒租约、30 秒独立续租和 T022 的 ACK 持久化门槛；人工申请不能把 UNKNOWN 强制写成成功。
+
+复用原依赖、凭据与普通 User1 身份，选择 JDK 21 后在项目根目录执行：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+python3 deploy/scripts/verify-database.py
+python3 deploy/scripts/verify-anchor-retries.py
+```
+
+请求和前后状态观察见 [t024.http](../examples/t024.http)。探针使用独占业务夹具与消息拓扑，实际故障边界和结果以私有报告及 [验证记录](../docs/verification.md) 为准；正常成功状态不通过 SQL 伪造。T025 的引用感知对象清理见下文；T027 的完整跨系统故障矩阵仍未完成，M4 尚未通过。
+
+本轮 `.local/t024-build-initial.log` 的 JDK 21 clean verify **458 项测试**通过，失败、错误和跳过均为 0；后续仅调整独立探针并完成 `.local/t024-probe-compile.log` 的 test-compile，生产代码和上述单测未变。最终数据库报告 `.local/database-probe/20261026T070711Z-6da80706/verify.json` 的 **235 项真实约束**及回滚预算检查通过，覆盖 UNKNOWN 不消耗明确失败预算、十次冲突停止新领取、人工基线开启新一轮并选择最新 dispatch、旧尝试保留及永久失败排除；tenthDefiniteConflictCheckpointVerified=true 还证明当前 Worker 到达第十次明确冲突后仍能提交终止检查点，随后不再被自动领取。
+
+真实探针 `.local/anchor-retry-probe/20261026T070756Z-f089a6a4/verify.json` 为 PASS，完成 **77 次业务 HTTP/599 项检查**，本次实际运行一次通过。两个业务版本真实 CONFIRMED，两个安全负例为不可重试 FAILED；共接受两条人工重新检查申请。已保存 commitBytes 的确认响应实际丢失一次，随后复用原确认请求恢复；另一例在网络提交之前注入一次异常，再恢复原 prepared transaction/txId，不能将它表述为已发送交易的响应丢失。一次登记准备阶段的权限拒绝来自隔离测试装配，没有修改真实链 ACL；摘要冲突则使用实际链登记验证。
+
+业务接口实测覆盖当前任务权限、幂等重放、同请求编号改原因冲突、重复待处理意图拒绝，以及确认后不再创建新意图。检查项数包含真实依赖、SQL 和状态核对，不作为 599 个独立单测或性能指标。原交易和确认字节保持，历史尝试不删除、不重新编号。
+
+本轮共追加保留三条真实 VALID/code=0 链登记；只有前两条对应业务 CONFIRMED，第三条是特意写入错误摘要的冲突负例，业务保持 FAILED：
+
+| 场景 | evidenceId | 版本 | 账本登记交易号 | 区块号 |
+| --- | --- | --- | --- | --- |
+| 原 commit 恢复成功 | `cb17fff9-8a65-490a-8361-bca665f26895` | 1 | `dd60791cbd7ae58608e91abe9d818dcd2f6fc3e685f03b28e2448c5bbde55e09` | 32 |
+| 原 prepared transaction 恢复成功 | `5ba1f2b7-8a0d-4fb7-8f86-568bf49090b4` | 1 | `66ddcb9b118426a12672764e3a89bb48997cdd98bb1024e34837d4d8609d26cf` | 33 |
+| 摘要冲突负例 | `5ba1f2b7-8a0d-4fb7-8f86-568bf49090b4` | 3 | `5ea9901bf6892de7b36d5261fa7b47594e50d4e7b58fe437bdeac8f6b6496516` | 34 |
+
+第三条登记摘要为 64 个零，与该版本实际文件 SHA-256 不同；处理器拒绝覆盖，人工入口也拒绝继续重试。三条账本记录和 55 条安全审计继续追加保留，清理本次 3 个任务、7 个账号、1 台设备、4 个上传会话、8 个私有对象及自己的申请/消息/关联业务记录，独占消息拓扑已删除。原二十三表全部字段/BLOB、.env 和演示凭据保持。测试夹具 UUID 在清理后不能用于继续调用 HTTP，原 M2 成果的最终复查见 [验证记录](../docs/verification.md)。T024 完成，引用感知清理见下述 T025；M4 尚未通过。
+
+## 临时文件、分片及孤立对象清理（T025）
+
+清理依赖 `database,storage,cleanup`，不要求 Fabric 身份或 `ledger`。正常启动器通过以下命令显式启用；生产使用 `--profile prod --cleanup`，默认不初始化演示账号。
+
+```bash
+python3 deploy/scripts/run-backend.py --cleanup
+```
+
+`--cleanup` 可与 `--ledger` 同时使用，但它们分别控制清理和链存证。普通 local/prod 启动不会自动加入清理 profile。V14__storage_cleanup_tasks.sql 新增 `storage_cleanup_task` 保存对象摘要身份、发现时间、大小、状态、尝试次数、下次处理时间和清理租约；既有迁移不修改。清理没有对外删除接口，不向 HTTP 响应或任务审计暴露对象键。
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `CLEANUP_GRACE_SECONDS` | `3600` | 对象和临时残留的宽限时间，单位秒 |
+| `CLEANUP_BATCH_SIZE` | `100` | 每个对象前缀、待处理任务及每个临时目录的批量上限；范围 1～100 |
+| `CLEANUP_SCAN_DELAY_MS` | `60000` | 定时触发间隔，最小 1000 毫秒 |
+| `CLEANUP_SCHEDULER_ENABLED` | `true` | 是否触发自动清理；仅在 cleanup profile 下生效 |
+
+调度器使用一个无排队后台线程，并阻止清理周期重叠；启动和调度线程不执行 S3 I/O。对象扫描仅处理服务端规范的 `upload-parts/`、`evidence-files/` 键，跨轮保存分页位置，每轮按上限推进。一个前缀 LIST 失败会推迟该前缀，仍可处理另一个前缀及已有的到期清理任务。
+
+清理仅处理后续业务已不能采用的对象：正式 `evidence_version` 引用、已登记分片、仍为 UPLOADING 的候选对象及当前有效定版租约对应的候选对象均受保护。UPLOADING 仅在数据库期限到达后转为 EXPIRED；超出宽限的 EXPIRED 或 FAILED 会话、没有正式版本且没有有效处理租约时才退役其已登记分片。COMPLETED 的分片和正式文件继续保留，VERIFYING 的源分片继续供恢复使用。
+
+清理事务按照父任务、上传会话、清理任务的顺序取锁，领取任务后在事务外调用 S3 HEAD，再用短事务重查引用、状态、宽限和租约，最后在事务外 DELETE。任务租约为 120 秒，完成、重试及续租均校验当前 token 和数据库期限；旧 Worker 不能覆盖新处理结果。删除失败持久化 2、10、30、60、300 秒退避计划，对象已不存在按幂等完成处理。已完成清理的同键残留再次出现时，符合条件后可重新激活原清理任务。数据库提交失败不会被误报成对象删除失败。
+
+分片接收、文件定版和 COPY 核验共同使用 `TemporaryFileManager`。文件及所在目录仅授予当前用户权限，持有独立 `.lock` 文件的操作系统锁，文件句柄在实际 I/O 及提交边界结束后才释放；核验请求超时时，尚未结束的读取仍持有保护。清扫仅识别上传、定版和核验三种生成名称，拒绝符号链接并保留未知文件，不依赖进程内集合判断其他 JVM 是否仍在使用。超龄残留必须通过锁和文件身份检查后才删除；目录分页游标使后续批次可越过仍在使用或尚未到期的文件，游标在关闭、目录替换或缓存淘汰时释放。
+
+真实服务探针使用已构建的 `database-probe` 测试入口，运行前停止其他项目后端和消息消费者：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+python3 deploy/scripts/verify-cleanup.py
+```
+
+探针通过正式 HTTP 建立隔离上传，使用真实 MySQL、Garage、RabbitMQ，按受控故障边界驱动实际清理和定版处理器，检查提交结果不明、引用保护、到期退役、删除退避及删除前再次核对引用；另以独立 JVM 检查活动临时文件保护和崩溃残留回收。仅本轮进程使用 2 秒清理宽限和 20 秒上传期限，不修改生产默认值。它不启用 `ledger`，不会新增 Fabric 登记；收尾仅清理自己的链外夹具及空消息拓扑，审计继续追加。报告和日志保存于 `.local/cleanup-probe/<runId>/`，目录 0700、文件 0600；结果以 [验证记录](../docs/verification.md) 为准，观察方法见 [t025.http](../examples/t025.http)。
+
+T025 已通过 508 项后端测试、248 项真实数据库约束，以及独立清理探针的 30 次 HTTP/303 项检查；四个正式文件版本均由真实定版处理器生成，无新增 Fabric 登记。探针收尾核对并保留 37 条任务范围安全审计，清理自己的上传、清理任务、对象及消息拓扑后，原二十四表全字段和二进制检查点保持。最终 JAR 对原 M2 的 15 次 HTTP/111 项复查通过。失败运行、修复原因及完整证据路径见 [验证记录](../docs/verification.md#t025临时文件分片及孤立对象清理)。后续权限及并发回归见下述 T026；M4 尚未通过。
+
+## 权限、状态与跨模块并发回归（T026）
+
+本轮修复两个管理员同时维护不同任务时的真实 MySQL 成员更新死锁。成员替换在父任务锁后预读当前身份，收集本机构当前成员、请求候选及操作者，按账号编号去重排序加锁，再最终重验身份、tokenVersion、角色、成员、任务锁号及候选启用状态/角色。删除按具体成员编号执行，不再使用隐式锁其他账号的多表 DELETE JOIN；创建者与对方机构成员保留。业务和审计仍原子提交，接口及 V1～V14 迁移保持。
+
+选择 JDK 21、构建测试 CLI 后，使用既有服务和凭据运行以下独立探针。运行前停止其他项目后端和消息消费者：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+python3 deploy/scripts/verify-member-locks.py
+python3 deploy/scripts/verify-regression.py
+```
+
+成员锁专项只需要真实 MySQL，通过真实 TaskService 创建两个独占任务，让两个管理员分别持有父任务锁后同时竞争相关账号；8 轮/16 次更新均成功且无死锁，核对账号顺序、成员集合、任务锁号和每次唯一审计。它不启动 HTTP、对象、消息或 Fabric Worker，也不计入 HTTP 次数。
+
+综合回归使用真实 MySQL、Garage、RabbitMQ、Fabric 和原 User1，通过正式 HTTP 建立业务。成员、复核、共享审批、提交及完成各以两个请求竞争同一锁号或 PENDING，结果均为一个 200、一个 409，再核对唯一数据库结果和成功审计。实际 S3 读取的事务外门闩控制成员撤销/核验、换机/定版及完成/历史定版交错；同时检查直接 ID、SQL 权限分页、同 JWT 成员撤销、新旧版本精确授权和终态写入限制。
+
+已完成任务仍可维护成员及申请、批准、撤销指定版本共享，这些操作不能重开任务或改变 completedAt；新上传、换机、定版、复核和异常写入继续受终态限制。测试关闭本轮发布和两类恢复扫描，暂停自己的消费者，显式以原 Outbox 事件调用生产处理器；不通过 SQL 伪造正常成功状态。末尾真实发布确认并仅排空本轮 eventId。安全报告与日志分别保存在 `.local/member-lock-probe/`、`.local/regression-probe/`，目录 0700、文件 0600。
+
+513 项后端测试、248 项数据库约束、综合回归 183 次 HTTP/1322 项检查及原 M2 15 次 HTTP/116 项复查通过。四个实际固定版本均通过原有效交易确认及两机构查询，区块 35～38 的登记和追加审计保留；清理自己的链外夹具和空消息拓扑后，原二十四表及凭据保持。修复前死锁证据及精确场景见 [验证记录](../docs/verification.md#t026权限状态与跨模块并发回归)，观察示例见 [t026.http](../examples/t026.http)。T026 完成，完整跨系统故障矩阵见下述 T027。
+
+## 跨系统故障注入与恢复验收（T027）
+
+使用 JDK 21 和既有 MySQL、Garage、RabbitMQ、Fabric、原 User1，先停其他项目后端及消息消费者。总入口顺序执行发送/定版和 Fabric RPC 两组，保留各自分阶段的独立报告：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+python3 deploy/scripts/verify-faults.py
+```
+
+也可分别运行 `verify-publish-crashes.py`、`verify-fabric-crashes.py`。普通 Maven 构建只执行本地测试，不自动提交链交易或触发进程崩溃。真实探针不缩短生产的 120 秒租约，不手改业务成功状态。
+
+发送/定版组由协调 JVM 通过正式 HTTP 建立隔离上传，随后关闭其应用上下文。三个独立子 JVM 分别在 Outbox 领取事务提交后/发送前、真实发布确认后/SENT前、候选文件实际 PUT 后/版本事务前以 73、74、75 退出。原租约自然到期后，新 JVM 启用默认发布、消费者和两类恢复扫描，核对原事件真实重复投递及生产 listener 的 ACK、唯一版本/存证/成功审计，以及候选对象写入后的恢复。
+
+Fabric 组依次使用 setup、提交前、真实提交返回后、真实确认返回后、recover 五个独立 JVM。三次故障均为 halt(73)，原交易与已有确认请求保存在数据库，报告只保留编号及字节摘要。恢复优先沿原检查点；已提交但 commitBytes 未保存时，可凭相同的有效业务登记直接确认，原尝试继续保留 SUBMITTING/null commit 是合法历史，不能补造检查点。
+
+恢复阶段对一项已可能提交的交易，在测试装配的 commit 和业务查询边界同时注入 UNAVAILABLE，核对至少两次默认扫描形成持久 UNKNOWN、DONE 和退避计划；放开边界后实际收敛。该注入不停止共享 Fabric 网络，不表述为网络已经物理宕机。Fabric 组暂停自己的消息消费者以证明扫描器独立恢复；发送组则实际启用消费者并验证重复投递。
+
+总报告位于 `.local/fault-matrix/`，分组报告位于 `.local/publish-crash-probe/` 和 `.local/fabric-crash-probe/`，目录 0700、JSON/日志 0600。夹具明文密码及令牌不写报告或临时凭据文件，检查点不含对象键、JWT、设备令牌或原始交易字节。候选文件崩溃留下的本地 finalize 文件只在本轮私有目录保留作证据，无引用 S3 候选随独占对象清理，不把此收尾计为一次生产 GC 验收。
+
+总入口 `--resume <runDirectory>` 可复用已经通过的组件，但要求实际生产 classes 与运行依赖摘要一致；生产实现变化后必须新建矩阵运行。Fabric 组件的 `--recover <runDirectory>` 用于三个预定 halt 已完成而恢复阶段尚未通过的运行，旧失败报告/日志另名保留；`--cleanup <runDirectory>` 只清理已停止运行的自有夹具。已提交链登记和安全审计始终追加保留。观察方式见 [t027.http](../examples/t027.http)，实际结果见 [验证记录](../docs/verification.md#t027跨系统故障注入与恢复验收)。
+
+本轮总矩阵及两个组件均首轮通过：发送/定版组 23 次 HTTP/120 项协调器检查，Fabric 组 20 次 HTTP/155 项检查，六次预定真实 halt 后各三个版本实际确认。原 120 秒租约自然到期，默认扫描在两次 RPC 不可用时保存 UNKNOWN/退避，再恢复原交易；发布确认丢失后的同事件重发和 DONE 后重复 ACK 已核对。513 项后端测试、248 项数据库约束及原 M2 15 次 HTTP/110 项复查通过；区块 39～44 的六条登记追加保留，清理自有夹具后原二十四表及凭据保持。T027 和 M4 已通过，下一项 T028 提供最小管理界面，M5 和完整 MVP 尚未完成。

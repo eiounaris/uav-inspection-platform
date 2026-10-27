@@ -5,6 +5,7 @@ import com.uav.inspection.blockchain.EvidenceLedgerClient.*;
 import com.uav.inspection.blockchain.InstitutionLedgerClients;
 import com.uav.inspection.common.error.BusinessException;
 import com.uav.inspection.common.error.ErrorCode;
+import com.uav.inspection.common.temp.TemporaryFileManager;
 import com.uav.inspection.evidence.storage.ObjectStorage;
 import com.uav.inspection.evidence.verification.VerificationModels.*;
 import com.uav.inspection.evidence.verification.VerificationTransactions.Prepared;
@@ -31,6 +32,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HexFormat;
@@ -66,6 +69,42 @@ class VerificationServiceTest {
         });
         when(storage.open("private/object")).thenAnswer(call->{ outsideTransaction(); return new ByteArrayInputStream(original); });
         when(owner.queryEvidence("evidence",3)).thenAnswer(call->{ outsideTransaction(); return found(hash(original)); });
+    }
+
+    @Test
+    void anUnattainableCopyFreeSpaceFloorIsReportedBeforeOpeningAnyInputOrTemporaryFile() throws Exception {
+        var limits=new VerificationSettings(new MockEnvironment()
+                .withProperty("inspection.verification.concurrency","1")
+                .withProperty("inspection.verification.timeout-seconds","5")
+                .withProperty("inspection.verification.min-free-space",Long.toString(Long.MAX_VALUE))
+                .withProperty("inspection.verification.temp-directory",directory.resolve("space").toString()));
+        var temporary=mock(TemporaryFileManager.class);
+        var input=mock(VerificationService.CopyInput.class);
+        try(var service=new VerificationService(phases,storage,clients,limits,temporary)) {
+            var result=service.verifyCopy(ACTOR,VERSION,"copy.png","image/png",original.length,input);
+            assertEquals("FILE_READ_FAILED",result.result());
+            assertEquals("LOCAL_SPACE_UNAVAILABLE",result.reason());
+            verifyNoInteractions(temporary,input,storage,owner,operator);
+            try(var entries=Files.list(limits.tempDirectory())) { assertEquals(0,entries.count()); }
+        }
+    }
+
+    @Test
+    void aCleanupPassCannotDeleteTheCopyWhileVerificationIsReadingIt() throws Exception {
+        var settings=settings(1,5);
+        try(var service=new VerificationService(phases,storage,clients,settings,new TemporaryFileManager())) {
+            var result=service.verifyCopy(ACTOR,VERSION,"copy.png","image/png",original.length,()->{
+                Path temporary;
+                try(var entries=Files.list(settings.tempDirectory())) {
+                    temporary=entries.filter(p->p.getFileName().toString().endsWith(".tmp")).findFirst().orElseThrow();
+                }
+                Files.setLastModifiedTime(temporary,FileTime.from(Instant.now().minusSeconds(7200)));
+                var sweep=new TemporaryFileManager().sweep(settings.tempDirectory(),Duration.ofSeconds(60),100);
+                assertTrue(sweep.locked()>0);assertEquals(0,sweep.deleted());assertTrue(Files.exists(temporary));
+                return new ByteArrayInputStream(original);
+            });
+            assertEquals("MATCH",result.result());assertTemporaryDirectoryEmpty();
+        }
     }
 
     @Test
