@@ -43,6 +43,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.S3Exception;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import javax.imageio.ImageIO;
@@ -87,7 +88,7 @@ public final class StorageCleanupProbe {
     private final List<CompletableFuture<Void>> workers=new ArrayList<>();
     private JdbcTemplate jdbc;private DataSource dataSource;private S3Client s3;private ObjectStorage storage;private ObjectInventory inventory;
     private RabbitTemplate rabbit;private OutboxPublisher publisher;private FinalizationProcessor processor;private FinalizationTransactions finalPhases;
-    private CleanupProcessor cleanup;private CleanupTransactions cleanupPhases;private FaultPlan faults;private HttpClient client;
+    private CleanupProcessor cleanup;private FaultPlan faults;private HttpClient client;
     private SimpleMessageListenerContainer finalizeContainer;private String baseUrl,bucket,taskId,deviceId;private Scope scope;private byte[] baseline;
 
     private StorageCleanupProbe(Path output){reportPath=output.toAbsolutePath().normalize();runDirectory=reportPath.getParent();tempDirectory=runDirectory.resolve("managed-temp");report.put("formatVersion",1);report.put("runId",runId);report.put("startedAt",Instant.now().toString());report.put("passed",false);report.put("checks",checks);report.put("requests",requests);}
@@ -114,7 +115,7 @@ public final class StorageCleanupProbe {
                 "--inspection.verification.temp-directory="+tempDirectory.resolve("verification"))){
             jdbc=context.getBean(JdbcTemplate.class);dataSource=context.getBean(DataSource.class);s3=context.getBean(S3Client.class);storage=context.getBean(ObjectStorage.class);inventory=context.getBean(ObjectInventory.class);
             rabbit=context.getBean(RabbitTemplate.class);publisher=context.getBean(OutboxPublisher.class);processor=context.getBean(FinalizationProcessor.class);finalPhases=context.getBean(FinalizationTransactions.class);
-            cleanup=context.getBean(CleanupProcessor.class);cleanupPhases=context.getBean(CleanupTransactions.class);faults=context.getBean(FaultPlan.class);finalizeContainer=context.getBean("finalizationContainer",SimpleMessageListenerContainer.class);
+            cleanup=context.getBean(CleanupProcessor.class);context.getBean(CleanupTransactions.class);faults=context.getBean(FaultPlan.class);finalizeContainer=context.getBean("finalizationContainer",SimpleMessageListenerContainer.class);
             report.put("effectiveCleanupGraceSeconds",context.getBean(CleanupSettings.class).graceSeconds());
             bucket=context.getEnvironment().getRequiredProperty("inspection.storage.bucket");baseUrl="http://127.0.0.1:"+((ServletWebServerApplicationContext)context).getWebServer().getPort();
             require(!finalizeContainer.isRunning(),"own_consumer_paused_for_controlled_storage_lifecycle");
@@ -253,18 +254,18 @@ public final class StorageCleanupProbe {
         Process holder=startChild("temp-active",directory,ready,stop);
         try {
             await(()->Files.isRegularFile(ready),"separate_jvm_has_live_managed_temporary_file");
-            String filename=string(JSON.readValue(Files.readAllBytes(ready),Map.class).get("file"));
+            String filename=string(JSON.readValue(Files.readAllBytes(ready),new TypeReference<Map<String,Object>>() {}).get("file"));
             Process sweep=startChild("temp-sweep",directory,sweepReport,stop);require(sweep.waitFor(20,TimeUnit.SECONDS)&&sweep.exitValue()==0,"second_jvm_active_file_sweep_completes");
-            Map<String,Object> result=JSON.readValue(Files.readAllBytes(sweepReport),Map.class);
+            Map<String,Object> result=JSON.readValue(Files.readAllBytes(sweepReport),new TypeReference<Map<String,Object>>() {});
             require(Files.isRegularFile(directory.resolve(filename))&&number(result.get("locked"))>=1&&number(result.get("deleted"))==0,"cross_jvm_cleanup_cannot_delete_older_active_file");
         }finally{Files.writeString(stop,"stop",StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING);if(!holder.waitFor(15,TimeUnit.SECONDS)){holder.destroyForcibly();holder.waitFor(5,TimeUnit.SECONDS);}}
         require(holder.exitValue()==0,"owned_holder_closes_without_forced_process_termination");
         Path crashed=runDirectory.resolve("temp-crash-ready.json");Process crash=startChild("temp-crash",directory,crashed,stop);require(crash.waitFor(15,TimeUnit.SECONDS)&&crash.exitValue()==73,"separate_jvm_halts_with_managed_temp_handle_open");
-        String crashName=string(JSON.readValue(Files.readAllBytes(crashed),Map.class).get("file"));require(Files.isRegularFile(directory.resolve(crashName)),"halt_retains_actual_temporary_file_residue");
+        String crashName=string(JSON.readValue(Files.readAllBytes(crashed),new TypeReference<Map<String,Object>>() {}).get("file"));require(Files.isRegularFile(directory.resolve(crashName)),"halt_retains_actual_temporary_file_residue");
         Path target=runDirectory.resolve("foreign-target.bin");Files.write(target,new byte[]{19,20,21});Path link=directory.resolve("upload-777777.part");Files.createSymbolicLink(link,target);
         Path foreign=directory.resolve("foreign.keep");Files.write(foreign,new byte[]{22,23});Files.setLastModifiedTime(foreign,FileTime.from(Instant.now().minusSeconds(7200)));
         Path finalSweep=runDirectory.resolve("temp-restart-sweep.json");Process restarted=startChild("temp-sweep",directory,finalSweep,stop);require(restarted.waitFor(20,TimeUnit.SECONDS)&&restarted.exitValue()==0,"new_jvm_sweeps_crashed_process_residue");
-        var result=JSON.readValue(Files.readAllBytes(finalSweep),Map.class);
+        var result=JSON.readValue(Files.readAllBytes(finalSweep),new TypeReference<Map<String,Object>>() {});
         require(!Files.exists(directory.resolve(crashName))&&number(result.get("deleted"))>=1,"released_crash_lock_allows_actual_old_file_removal");
         require(Files.isSymbolicLink(link)&&Arrays.equals(Files.readAllBytes(target),new byte[]{19,20,21})&&Files.isRegularFile(foreign),"symlink_target_and_foreign_temporary_names_are_preserved");
         Files.deleteIfExists(link);Files.deleteIfExists(foreign);Files.deleteIfExists(target);Files.deleteIfExists(stop);
@@ -275,15 +276,17 @@ public final class StorageCleanupProbe {
         return new ProcessBuilder(java,"-cp",System.getProperty("java.class.path"),StorageCleanupProbe.class.getName(),mode,directory.toString(),output.toString(),stop.toString()).redirectErrorStream(true).redirectOutput(log.toFile()).start();
     }
     private static void temporaryChild(String[] args)throws Exception {
-        if(args.length!=4)throw new IllegalArgumentException("Invalid child arguments");Path directory=Path.of(args[1]),output=Path.of(args[2]),stop=Path.of(args[3]);var manager=new TemporaryFileManager();
-        if(args[0].equals("temp-sweep")){
-            var result=manager.sweep(directory,Duration.ofSeconds(2),100);writePrivate(output,Map.of("inspected",result.inspected(),"deleted",result.deleted(),"locked",result.locked(),"skipped",result.skipped(),"failed",result.failed()));return;
-        }
-        try(var file=manager.create(directory,"upload-",".part")){
-            Files.write(file.path(),new byte[]{11,12,13});Files.setLastModifiedTime(file.path(),FileTime.from(Instant.now().minusSeconds(7200)));writePrivate(output,Map.of("file",file.path().getFileName().toString()));
-            if(args[0].equals("temp-crash")){System.out.flush();System.err.flush();Runtime.getRuntime().halt(73);}
-            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(30);while(!Files.exists(stop)&&System.nanoTime()<deadline)Thread.sleep(50);
-            if(!Files.exists(stop))throw new IllegalStateException("holder timed out");
+        if(args.length!=4)throw new IllegalArgumentException("Invalid child arguments");Path directory=Path.of(args[1]),output=Path.of(args[2]),stop=Path.of(args[3]);
+        try (var manager=new TemporaryFileManager()) {
+            if(args[0].equals("temp-sweep")){
+                var result=manager.sweep(directory,Duration.ofSeconds(2),100);writePrivate(output,Map.of("inspected",result.inspected(),"deleted",result.deleted(),"locked",result.locked(),"skipped",result.skipped(),"failed",result.failed()));return;
+            }
+            try(var file=manager.create(directory,"upload-",".part")){
+                Files.write(file.path(),new byte[]{11,12,13});Files.setLastModifiedTime(file.path(),FileTime.from(Instant.now().minusSeconds(7200)));writePrivate(output,Map.of("file",file.path().getFileName().toString()));
+                if(args[0].equals("temp-crash")){System.out.flush();System.err.flush();Runtime.getRuntime().halt(73);}
+                long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(30);while(!Files.exists(stop)&&System.nanoTime()<deadline)Thread.sleep(50);
+                if(!Files.exists(stop))throw new IllegalStateException("holder timed out");
+            }
         }
     }
     private static void writePrivate(Path path,Object value)throws Exception{Path tmp=Files.createTempFile(path.getParent(),".cleanup-probe-",".tmp",PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));try{Files.write(tmp,JSON.writerWithDefaultPrettyPrinter().writeValueAsBytes(value));Files.move(tmp,path,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(tmp);}}
@@ -312,7 +315,7 @@ public final class StorageCleanupProbe {
     private Reply expect(String name,String method,String path,Account actor,Object body,int status)throws Exception{Reply result=requestHeaders(name,method,path,actor==null?Map.of():Map.of("Authorization","Bearer "+actor.token),body==null?null:JSON.writeValueAsBytes(body),body==null?null:"application/json");assertCode(result,status,status==200||status==202?"OK":status==400?"INVALID_ARGUMENT":status==401?"UNAUTHORIZED":status==403?"FORBIDDEN":"VERSION_CONFLICT",name);return result;}
     private void assertCode(Reply reply,int status,String code,String name){require(reply.status==status,name+"_http_"+status);require(code.equals(reply.body.get("code")),name+"_code");}
     private Reply requestHeaders(String name,String method,String path,Map<String,String> headers,byte[] bytes,String type)throws Exception{
-        var builder=HttpRequest.newBuilder(URI.create(baseUrl+path)).timeout(Duration.ofSeconds(30)).header("X-Trace-Id",sharedTrace).header("Accept","application/json");headers.forEach(builder::header);if(type!=null)builder.header("Content-Type",type);builder.method(method,bytes==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofByteArray(bytes));var response=client.send(builder.build(),HttpResponse.BodyHandlers.ofByteArray());requests.add(Map.of("case",name,"status",response.statusCode(),"traceId",sharedTrace));require(response.headers().firstValue("Content-Type").orElse("").contains("application/json"),name+"_json");String text=new String(response.body(),StandardCharsets.UTF_8);boolean signed=path.endsWith("/download-url")&&response.statusCode()==200,credential=path.equals(API+"/auth/login")||path.equals(API+"/drones")&&method.equals("POST");if(!signed)require((credential||secrets.stream().noneMatch(text::contains))&&!text.contains("object_key")&&!text.contains("objectKey")&&!text.contains("upload-parts/")&&!text.contains("evidence-files/")&&!text.contains("transactionBytes")&&!text.contains("commitBytes")&&!text.contains("X-Amz-"),name+"_safe_response");Map<String,Object> envelope=JSON.readValue(response.body(),Map.class);require(envelope.keySet().equals(Set.of("code","message","data","traceId")),name+"_uniform_envelope");require(sharedTrace.equals(envelope.get("traceId"))&&sharedTrace.equals(response.headers().firstValue("X-Trace-Id").orElse(null)),name+"_shared_trace_is_preserved");return new Reply(response.statusCode(),envelope);
+        var builder=HttpRequest.newBuilder(URI.create(baseUrl+path)).timeout(Duration.ofSeconds(30)).header("X-Trace-Id",sharedTrace).header("Accept","application/json");headers.forEach(builder::header);if(type!=null)builder.header("Content-Type",type);builder.method(method,bytes==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofByteArray(bytes));var response=client.send(builder.build(),HttpResponse.BodyHandlers.ofByteArray());requests.add(Map.of("case",name,"status",response.statusCode(),"traceId",sharedTrace));require(response.headers().firstValue("Content-Type").orElse("").contains("application/json"),name+"_json");String text=new String(response.body(),StandardCharsets.UTF_8);boolean signed=path.endsWith("/download-url")&&response.statusCode()==200,credential=path.equals(API+"/auth/login")||path.equals(API+"/drones")&&method.equals("POST");if(!signed)require((credential||secrets.stream().noneMatch(text::contains))&&!text.contains("object_key")&&!text.contains("objectKey")&&!text.contains("upload-parts/")&&!text.contains("evidence-files/")&&!text.contains("transactionBytes")&&!text.contains("commitBytes")&&!text.contains("X-Amz-"),name+"_safe_response");Map<String,Object> envelope=JSON.readValue(response.body(),new TypeReference<Map<String,Object>>() {});require(envelope.keySet().equals(Set.of("code","message","data","traceId")),name+"_uniform_envelope");require(sharedTrace.equals(envelope.get("traceId"))&&sharedTrace.equals(response.headers().firstValue("X-Trace-Id").orElse(null)),name+"_shared_trace_is_preserved");return new Reply(response.statusCode(),envelope);
     }
     private void writeReport()throws Exception{report.put("caseCount",requests.size());report.put("checkCount",checks.size());byte[] content=JSON.writerWithDefaultPrettyPrinter().writeValueAsBytes(report);String text=new String(content,StandardCharsets.UTF_8);if(secrets.stream().anyMatch(text::contains)||text.contains("upload-parts/")||text.contains("evidence-files/")||text.contains("X-Amz-")||text.contains("Signature="))throw new ProbeFailure("unsafe_report");Files.createDirectories(reportPath.getParent());Path tmp=Files.createTempFile(reportPath.getParent(),".reliability-",".tmp",PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));try{Files.write(tmp,content);Files.move(tmp,reportPath,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(tmp);}}
     private void require(boolean value,String name){checks.add(Map.of("check",name,"passed",value));if(!value)throw new ProbeFailure(name);}
@@ -323,7 +326,6 @@ public final class StorageCleanupProbe {
     private static final class Account{final String id,username,password;String token;Account(String id,String username,String password){this.id=id;this.username=username;this.password=password;}@Override public String toString(){return "CleanupAccount["+id+"]";}}private record Scope(String task,String requirement,String subtask,String execution){}private record Reply(int status,Map<String,Object> body){Map<String,Object> data(){return object(body.get("data"));}@Override public String toString(){return "CleanupReply["+status+"]";}}private static final class ProbeFailure extends RuntimeException{ProbeFailure(String name){super(name);}}
     private void await(BooleanSupplier condition,String name)throws Exception {long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(40);while(System.nanoTime()<deadline){if(condition.getAsBoolean()){require(true,name);return;}Thread.sleep(100);}require(false,name);}
     private void awaitSeconds(BooleanSupplier condition,String name,int seconds)throws Exception {long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(seconds);while(System.nanoTime()<deadline){if(condition.getAsBoolean()){require(true,name);return;}Thread.sleep(100);}require(false,name);}
-    private static byte[] blob(Object value)throws Exception{if(value instanceof byte[] bytes)return bytes;if(value instanceof java.sql.Blob blob)return blob.getBytes(1,(int)blob.length());throw new ProbeFailure("expected_binary_checkpoint");}
     private long count(String sql,Object...args){Long value=jdbc.queryForObject(sql,Long.class,args);if(value==null)throw new ProbeFailure("missing_sql_count");return value;}
     private Map<String,Long> businessCounts(){Map<String,Long> result=new LinkedHashMap<>();TABLE_ORDER.keySet().forEach(t->result.put(t,count("SELECT COUNT(*) FROM "+t)));return result;}
     private byte[] businessSnapshot()throws Exception {

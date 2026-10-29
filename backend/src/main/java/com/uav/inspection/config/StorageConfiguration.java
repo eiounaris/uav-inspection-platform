@@ -75,7 +75,7 @@ public class StorageConfiguration {
                             required(environment,"access-key"),required(environment,"secret-key"))))
                     .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(
                                     environment.getRequiredProperty("inspection.storage.force-path-style",Boolean.class))
-                            .checksumValidationEnabled(false).chunkedEncodingEnabled(false).build()).build();
+                            .chunkedEncodingEnabled(false).build()).build();
         } catch(RuntimeException failure) {
             throw new IllegalStateException("Invalid local S3 download signing configuration");
         }

@@ -13,6 +13,8 @@ mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml clean verify
 java -jar backend/target/inspection-backend-0.1.0.jar
 ```
 
+构建启用 `deprecation`、`unchecked` 编译检查，编译警告会使构建失败；生产代码和测试代码均需通过。VS Code Java 扩展另检查未使用代码及资源生命周期，工作区配置已排除 `.local` 中的缓存和部署复现副本。更新配置后可执行 `Java: Clean Java Language Server Workspace` 重新导入。临时目录游标的资源所有权交接仅在 `TemporaryFileManager.openCursor` 局部抑制已核实的分析器误报，由目录文件描述符及关闭测试继续验证。
+
 默认环境为 `local`，绑定 `127.0.0.1:8080`。使用 Ctrl+C 停止。通过进程环境变量或 Spring Boot 标准命令行参数覆盖配置，例如：
 
 ```bash

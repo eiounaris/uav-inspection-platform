@@ -17,7 +17,6 @@ import com.uav.inspection.evidence.finalization.persistence.FinalizationMapper;
 import com.uav.inspection.evidence.storage.ObjectStorage;
 import com.uav.inspection.evidence.upload.persistence.UploadMapper;
 import com.uav.inspection.messaging.*;
-import org.springframework.amqp.core.*;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
@@ -36,6 +35,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import javax.imageio.ImageIO;
@@ -44,7 +44,6 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -88,14 +87,12 @@ public final class ProcessingRecoveryProbe {
     private ObjectStorage storage;
     private InstitutionLedgerClients clients;
     private RabbitTemplate rabbit;
-    private RabbitAdmin rabbitAdmin;
     private OutboxPublisher publisher;
     private FinalizationProcessor processor;
     private AnchorProcessor anchorProcessor;
     private FinalizationTransactions finalPhases;
     private AnchorTransactions anchorPhases;
     private UploadMapper uploads;
-    private AnchorMapper anchors;
     private FaultPlan faults;
     private SimpleMessageListenerContainer finalizeContainer,anchorContainer;
     private String baseUrl,bucket,taskId,deviceId,uploadId,eventId,versionId,submissionId,anchorEventId,lostUploadId,lostEventId,retryUploadId,retryEventId;
@@ -107,7 +104,7 @@ public final class ProcessingRecoveryProbe {
         this.phase=phase;
         runDirectory=directory.toAbsolutePath().normalize();
         checkpointPath=runDirectory.resolve("checkpoint.json");credentialPath=runDirectory.resolve("credentials.json");
-        checkpoint=phase.equals("crash")?new LinkedHashMap<>():JSON.readValue(Files.readAllBytes(checkpointPath),Map.class);
+        checkpoint=phase.equals("crash")?new LinkedHashMap<>():JSON.readValue(Files.readAllBytes(checkpointPath),new TypeReference<Map<String,Object>>() {});
         runId=phase.equals("crash")?UUID.randomUUID().toString():string(checkpoint.get("runId"));
         sharedTrace="t023-"+runId;exchange="inspection.recovery.probe."+runId;finalizeQueue=exchange+".finalize";
         anchorQueue=exchange+".anchor";deadExchange=exchange+".dead.events";deadQueue=exchange+".dead";
@@ -145,10 +142,10 @@ public final class ProcessingRecoveryProbe {
                 "--inspection.messaging.recovery-enabled="+automatic,"--inspection.ledger.recovery-enabled="+automatic)) {
             jdbc=context.getBean(JdbcTemplate.class);dataSource=context.getBean(DataSource.class);s3=context.getBean(S3Client.class);
             storage=context.getBean(ObjectStorage.class);clients=context.getBean(InstitutionLedgerClients.class);
-            rabbit=context.getBean(RabbitTemplate.class);rabbitAdmin=context.getBean(RabbitAdmin.class);publisher=context.getBean(OutboxPublisher.class);
+            rabbit=context.getBean(RabbitTemplate.class);context.getBean(RabbitAdmin.class);publisher=context.getBean(OutboxPublisher.class);
             processor=context.getBean(FinalizationProcessor.class);anchorProcessor=context.getBean(AnchorProcessor.class);
             finalPhases=context.getBean(FinalizationTransactions.class);anchorPhases=context.getBean(AnchorTransactions.class);
-            uploads=context.getBean(UploadMapper.class);anchors=context.getBean(AnchorMapper.class);faults=context.getBean(FaultPlan.class);
+            uploads=context.getBean(UploadMapper.class);context.getBean(AnchorMapper.class);faults=context.getBean(FaultPlan.class);
             finalizeContainer=context.getBean("finalizationContainer",SimpleMessageListenerContainer.class);
             anchorContainer=context.getBean("anchorContainer",SimpleMessageListenerContainer.class);
             bucket=context.getEnvironment().getRequiredProperty("inspection.storage.bucket");
@@ -339,7 +336,7 @@ public final class ProcessingRecoveryProbe {
         uploadIds.addAll(List.of(uploadId,lostUploadId,retryUploadId));scope=new Scope(taskId,string(checkpoint.get("requirementId")),string(checkpoint.get("subtaskId")),string(checkpoint.get("executionId")));
         ledgerRecords.addAll(objects(checkpoint.get("ledgerRecordsRetained")));
         object(checkpoint.get("expectedDigests")).forEach((id,hash)->expectedDigests.put(id,string(hash)));
-        for(var row:objects(JSON.readValue(Files.readAllBytes(credentialPath),Map.class).get("accounts"))){var account=new Account(string(row.get("id")),string(row.get("username")),string(row.get("password")));accounts.add(account);secrets.add(account.password);}
+        for(var row:objects(JSON.readValue(Files.readAllBytes(credentialPath),new TypeReference<Map<String,Object>>() {}).get("accounts"))){var account=new Account(string(row.get("id")),string(row.get("username")),string(row.get("password")));accounts.add(account);secrets.add(account.password);}
     }
     private void cleanupOwnedQueues() {
         Set<String> ids=new HashSet<>(jdbc.queryForList("SELECT event_id FROM outbox_event WHERE biz_id IN (SELECT id FROM upload_session WHERE task_id=?) OR biz_id IN (SELECT id FROM chain_submission WHERE version_id IN (SELECT id FROM evidence_version WHERE task_id=?))",String.class,taskId,taskId));
@@ -367,7 +364,7 @@ public final class ProcessingRecoveryProbe {
     private Reply expect(String name,String method,String path,Account actor,Object body,int status)throws Exception{Reply result=requestHeaders(name,method,path,actor==null?Map.of():Map.of("Authorization","Bearer "+actor.token),body==null?null:JSON.writeValueAsBytes(body),body==null?null:"application/json");assertCode(result,status,status==200||status==202?"OK":status==400?"INVALID_ARGUMENT":status==401?"UNAUTHORIZED":status==403?"FORBIDDEN":"VERSION_CONFLICT",name);return result;}
     private void assertCode(Reply reply,int status,String code,String name){require(reply.status==status,name+"_http_"+status);require(code.equals(reply.body.get("code")),name+"_code");}
     private Reply requestHeaders(String name,String method,String path,Map<String,String> headers,byte[] bytes,String type)throws Exception{
-        var builder=HttpRequest.newBuilder(URI.create(baseUrl+path)).timeout(Duration.ofSeconds(30)).header("X-Trace-Id",sharedTrace).header("Accept","application/json");headers.forEach(builder::header);if(type!=null)builder.header("Content-Type",type);builder.method(method,bytes==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofByteArray(bytes));var response=client.send(builder.build(),HttpResponse.BodyHandlers.ofByteArray());requests.add(Map.of("case",name,"status",response.statusCode(),"traceId",sharedTrace));require(response.headers().firstValue("Content-Type").orElse("").contains("application/json"),name+"_json");String text=new String(response.body(),StandardCharsets.UTF_8);boolean signed=path.endsWith("/download-url")&&response.statusCode()==200,credential=path.equals(API+"/auth/login")||path.equals(API+"/drones")&&method.equals("POST");if(!signed)require((credential||secrets.stream().noneMatch(text::contains))&&!text.contains("object_key")&&!text.contains("objectKey")&&!text.contains("upload-parts/")&&!text.contains("evidence-files/")&&!text.contains("transactionBytes")&&!text.contains("commitBytes")&&!text.contains("X-Amz-"),name+"_safe_response");Map<String,Object> envelope=JSON.readValue(response.body(),Map.class);require(envelope.keySet().equals(Set.of("code","message","data","traceId")),name+"_uniform_envelope");require(sharedTrace.equals(envelope.get("traceId"))&&sharedTrace.equals(response.headers().firstValue("X-Trace-Id").orElse(null)),name+"_shared_trace_is_preserved");return new Reply(response.statusCode(),envelope);
+        var builder=HttpRequest.newBuilder(URI.create(baseUrl+path)).timeout(Duration.ofSeconds(30)).header("X-Trace-Id",sharedTrace).header("Accept","application/json");headers.forEach(builder::header);if(type!=null)builder.header("Content-Type",type);builder.method(method,bytes==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofByteArray(bytes));var response=client.send(builder.build(),HttpResponse.BodyHandlers.ofByteArray());requests.add(Map.of("case",name,"status",response.statusCode(),"traceId",sharedTrace));require(response.headers().firstValue("Content-Type").orElse("").contains("application/json"),name+"_json");String text=new String(response.body(),StandardCharsets.UTF_8);boolean signed=path.endsWith("/download-url")&&response.statusCode()==200,credential=path.equals(API+"/auth/login")||path.equals(API+"/drones")&&method.equals("POST");if(!signed)require((credential||secrets.stream().noneMatch(text::contains))&&!text.contains("object_key")&&!text.contains("objectKey")&&!text.contains("upload-parts/")&&!text.contains("evidence-files/")&&!text.contains("transactionBytes")&&!text.contains("commitBytes")&&!text.contains("X-Amz-"),name+"_safe_response");Map<String,Object> envelope=JSON.readValue(response.body(),new TypeReference<Map<String,Object>>() {});require(envelope.keySet().equals(Set.of("code","message","data","traceId")),name+"_uniform_envelope");require(sharedTrace.equals(envelope.get("traceId"))&&sharedTrace.equals(response.headers().firstValue("X-Trace-Id").orElse(null)),name+"_shared_trace_is_preserved");return new Reply(response.statusCode(),envelope);
     }
     private void writeReport()throws Exception{report.put("caseCount",requests.size());report.put("checkCount",checks.size());byte[] content=JSON.writerWithDefaultPrettyPrinter().writeValueAsBytes(report);String text=new String(content,StandardCharsets.UTF_8);if(secrets.stream().anyMatch(text::contains)||text.contains("upload-parts/")||text.contains("evidence-files/")||text.contains("X-Amz-")||text.contains("Signature="))throw new ProbeFailure("unsafe_report");Files.createDirectories(reportPath.getParent());Path tmp=Files.createTempFile(reportPath.getParent(),".reliability-",".tmp",PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));try{Files.write(tmp,content);Files.move(tmp,reportPath,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(tmp);}}
     private void require(boolean value,String name){checks.add(Map.of("check",name,"passed",value));if(!value)throw new ProbeFailure(name);}

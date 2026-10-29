@@ -99,8 +99,10 @@ class VerificationServiceTest {
                     temporary=entries.filter(p->p.getFileName().toString().endsWith(".tmp")).findFirst().orElseThrow();
                 }
                 Files.setLastModifiedTime(temporary,FileTime.from(Instant.now().minusSeconds(7200)));
-                var sweep=new TemporaryFileManager().sweep(settings.tempDirectory(),Duration.ofSeconds(60),100);
-                assertTrue(sweep.locked()>0);assertEquals(0,sweep.deleted());assertTrue(Files.exists(temporary));
+                try (var sweeper = new TemporaryFileManager()) {
+                    var sweep=sweeper.sweep(settings.tempDirectory(),Duration.ofSeconds(60),100);
+                    assertTrue(sweep.locked()>0);assertEquals(0,sweep.deleted());assertTrue(Files.exists(temporary));
+                }
                 return new ByteArrayInputStream(original);
             });
             assertEquals("MATCH",result.result());assertTemporaryDirectoryEmpty();
@@ -303,7 +305,10 @@ class VerificationServiceTest {
             protected void doCommit(DefaultTransactionStatus status){}
             protected void doRollback(DefaultTransactionStatus status){}
         };
-        proxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (VerificationService)proxy.getProxy();
     }
 

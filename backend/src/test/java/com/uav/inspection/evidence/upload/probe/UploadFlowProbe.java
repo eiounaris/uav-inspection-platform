@@ -9,6 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import javax.imageio.ImageIO;
@@ -600,7 +601,7 @@ public final class UploadFlowProbe {
         require(!text.contains("objectKey") && !text.contains("object_key") && !text.contains("upload-parts/")
                         && !text.contains(storageEndpoint) && secrets.stream().noneMatch(text::contains),
                 name + "_response_does_not_expose_private_storage_or_credentials");
-        Map<String, Object> envelope = JSON.readValue(response.body(), Map.class);
+        Map<String, Object> envelope = JSON.readValue(response.body(),new TypeReference<Map<String,Object>>() {});
         require(envelope.keySet().equals(Set.of("code", "message", "data", "traceId")), name + "_uniform_envelope");
         require(trace.equals(response.headers().firstValue("X-Trace-Id").orElse(null))
                         && trace.equals(envelope.get("traceId")), name + "_trace_header_and_body");

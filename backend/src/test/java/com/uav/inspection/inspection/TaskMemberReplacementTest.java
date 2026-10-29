@@ -101,7 +101,15 @@ class TaskMemberReplacementTest {
     private static MemberRow member(String id,String org){return new MemberRow(id,org,"member",OWNER.equals(org)?"[\"OWNER_TASK_ADMIN\"]":"[\"OPERATOR_TASK_ADMIN\"]");}
     private static TaskSummary task(long version){return new TaskSummary(TASK,OWNER,OPERATOR,"Inspection","North","COMPLETED",CREATOR,version,NOW,NOW,NOW);}
     private static String id(int n){return "10000000-0000-4000-8000-"+String.format("%012d",n);}
-    private TaskService service(){var proxy=new ProxyFactory(new TaskService(tasks,permissions,audit,Clock.systemUTC()));proxy.setProxyTargetClass(true);proxy.addAdvice(new TransactionInterceptor(transactions,new AnnotationTransactionAttributeSource()));return (TaskService)proxy.getProxy();}
+    private TaskService service() {
+        var proxy = new ProxyFactory(new TaskService(tasks,permissions,audit,Clock.systemUTC()));
+        proxy.setProxyTargetClass(true);
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(transactions);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
+        return (TaskService)proxy.getProxy();
+    }
     private static final class Transactions extends AbstractPlatformTransactionManager{
         int commits,rollbacks;protected Object doGetTransaction(){return new Object();}protected void doBegin(Object tx,TransactionDefinition def){}protected void doCommit(DefaultTransactionStatus status){commits++;}protected void doRollback(DefaultTransactionStatus status){rollbacks++;}
     }

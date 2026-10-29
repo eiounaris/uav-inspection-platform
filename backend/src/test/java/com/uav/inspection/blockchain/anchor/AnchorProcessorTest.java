@@ -499,7 +499,10 @@ class AnchorProcessorTest {
             protected void doCommit(DefaultTransactionStatus status){}
             protected void doRollback(DefaultTransactionStatus status){}
         };
-        proxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (AnchorProcessor)proxy.getProxy();
     }
 

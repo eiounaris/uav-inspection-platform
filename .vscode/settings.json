@@ -1,3 +1,15 @@
 {
-    "java.compile.nullAnalysis.mode": "disabled"
+    "java.compile.nullAnalysis.mode": "disabled",
+    "java.import.exclusions": [
+        "**/node_modules/**",
+        "**/.metadata/**",
+        "**/archetype-resources/**",
+        "**/META-INF/maven/**",
+        "**/.local/**"
+    ],
+    "java.project.resourceFilters": [
+        "node_modules",
+        "\\.git",
+        "\\.local"
+    ]
 }

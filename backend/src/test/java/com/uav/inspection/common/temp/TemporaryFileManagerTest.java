@@ -6,7 +6,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -116,9 +115,11 @@ class TemporaryFileManagerTest {
                 Files.writeString(handle.path(),"active bytes");
                 assertEquals("active bytes",Files.readString(handle.path()));
                 old(handle.path());
-                var result=new TemporaryFileManager().sweep(directory,RETENTION,100);
-                assertTrue(result.locked()>0);assertEquals(0,result.deleted());assertEquals(0,result.failed());
-                assertEquals("active bytes",Files.readString(handle.path()));
+                try (var sweeper = new TemporaryFileManager()) {
+                    var result=sweeper.sweep(directory,RETENTION,100);
+                    assertTrue(result.locked()>0);assertEquals(0,result.deleted());assertEquals(0,result.failed());
+                    assertEquals("active bytes",Files.readString(handle.path()));
+                }
             }
         }
         try (var entries=Files.list(directory)) { assertEquals(0,entries.count()); }
@@ -221,7 +222,12 @@ class TemporaryFileManagerTest {
         CountDownLatch start=new CountDownLatch(1);
         try(var workers=Executors.newFixedThreadPool(2)) {
             var left=workers.submit(()->{start.await();return manager.sweep(directory,RETENTION,1000);});
-            var right=workers.submit(()->{start.await();return new TemporaryFileManager().sweep(directory,RETENTION,1000);});
+            var right=workers.submit(()->{
+                start.await();
+                try (var sweeper = new TemporaryFileManager()) {
+                    return sweeper.sweep(directory,RETENTION,1000);
+                }
+            });
             start.countDown();
             var a=left.get(5,TimeUnit.SECONDS);var b=right.get(5,TimeUnit.SECONDS);
             assertEquals(0,a.failed()+b.failed());

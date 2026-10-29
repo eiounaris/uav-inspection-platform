@@ -19,6 +19,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import javax.sql.DataSource;
@@ -93,7 +94,7 @@ public final class MultipartFlowProbe {
     private MultipartFlowProbe(String phase,Path directory)throws Exception {
         this.phase=phase;this.directory=directory.toAbsolutePath().normalize();reportPath=this.directory.resolve(phase.equals("prepare")?"prepare.json":"report.json");
         checkpointPath=this.directory.resolve("checkpoint.json");credentialsPath=this.directory.resolve("credentials.json");
-        if(phase.equals("resume"))resources.putAll(JSON.readValue(Files.readAllBytes(checkpointPath),Map.class));
+        if(phase.equals("resume"))resources.putAll(JSON.readValue(Files.readAllBytes(checkpointPath),new TypeReference<Map<String,Object>>() {}));
         runId=phase.equals("prepare")?UUID.randomUUID().toString():string(resources.get("runId"));
         exchange="inspection.multipart.probe."+runId;finalizeQueue=exchange+".finalize";anchorQueue=exchange+".anchor";deadExchange=exchange+".dead.events";deadQueue=exchange+".dead";
         report.put("formatVersion",1);report.put("phase",phase);report.put("runId",runId);report.put("pid",ProcessHandle.current().pid());
@@ -172,7 +173,7 @@ public final class MultipartFlowProbe {
     private void restoreFixtures()throws Exception {
         taskId=string(resources.get("taskId"));subtaskId=string(resources.get("subtaskId"));executionId=string(resources.get("executionId"));droneId=string(resources.get("droneId"));
         requirementIds=((List<?>)resources.get("requirementIds")).stream().map(MultipartFlowProbe::string).toList();uploadIds.add(string(resources.get("uploadId")));
-        Map<String,Object> passwords=JSON.readValue(Files.readAllBytes(credentialsPath),Map.class);
+        Map<String,Object> passwords=JSON.readValue(Files.readAllBytes(credentialsPath),new TypeReference<Map<String,Object>>() {});
         for(var row:objects(resources.get("accounts"))){String id=string(row.get("id"));String password=string(passwords.get(id));accounts.add(new Account(id,string(row.get("username")),password));secrets.add(password);}
         require(number(resources.get("preparePid"))!=ProcessHandle.current().pid(),"resume_uses_a_different_real_jvm_process");
         report.put("preparePid",resources.get("preparePid"));report.put("businessCountsBefore",resources.get("businessCountsBefore"));
@@ -290,7 +291,7 @@ public final class MultipartFlowProbe {
         if(!process.waitFor(90,TimeUnit.SECONDS)){process.destroyForcibly();throw new ProbeFailure("upload_cli_timeout");}
         require(process.exitValue()==0,"real_upload_client_process_exits_successfully");
         String output=Files.readString(log);require(secrets.stream().noneMatch(output::contains),"upload_client_log_contains_no_credentials");
-        return JSON.readValue(output,Map.class);
+        return JSON.readValue(output,new TypeReference<Map<String,Object>>() {});
     }
     private void assertParts(Map<String,Object> progress,List<Long> received,long uploaded,Set<Integer> missing) {
         List<Map<String,Object>> parts=objects(progress.get("uploadedParts"));List<Long> actual=parts.stream().map(p->number(p.get("partNo"))).toList();
@@ -419,7 +420,7 @@ public final class MultipartFlowProbe {
         String text=new String(response.body(),StandardCharsets.UTF_8);boolean secretResponse=path.equals(API+"/drones")&&method.equals("POST")||path.equals(API+"/auth/login");
         require((secretResponse||secrets.stream().noneMatch(text::contains))&&!text.contains("objectKey")&&!text.contains("object_key")&&!text.contains("upload-parts/")&&!text.contains("evidence-files/")
                 &&!text.contains("transactionBytes")&&!text.contains("commitBytes")&&!text.contains(storageEndpoint),name+"_safe_response");
-        Map<String,Object> envelope=JSON.readValue(response.body(),Map.class);require(envelope.keySet().equals(Set.of("code","message","data","traceId")),name+"_uniform_envelope");
+        Map<String,Object> envelope=JSON.readValue(response.body(),new TypeReference<Map<String,Object>>() {});require(envelope.keySet().equals(Set.of("code","message","data","traceId")),name+"_uniform_envelope");
         require(trace.equals(envelope.get("traceId"))&&trace.equals(response.headers().firstValue("X-Trace-Id").orElse(null)),name+"_trace_propagated");return new Reply(response.statusCode(),envelope);
     }
     private void require(boolean value,String name){checks.add(Map.of("check",name,"passed",value));if(!value)throw new ProbeFailure(name);}

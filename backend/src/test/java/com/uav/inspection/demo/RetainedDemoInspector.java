@@ -21,6 +21,7 @@ import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.io.InputStream;
@@ -28,7 +29,6 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -84,7 +84,7 @@ public final class RetainedDemoInspector {
         report.put("startedAt",Instant.now().toString());report.put("checks",checks);
         environment.forEach((key,value)->{if(value!=null&&!value.isBlank()&&
                 (key.contains("PASSWORD")||key.contains("SECRET")||key.equals("S3_ACCESS_KEY")))secrets.add(value);});
-        var credentials=object(JSON.readValue(Files.readAllBytes(credentialsPath()),Map.class));
+        var credentials=object(JSON.readValue(Files.readAllBytes(credentialsPath()),new TypeReference<Map<String,Object>>() {}));
         check(number(credentials,"formatVersion")==1,"existing_credential_format_required");
         for(String group:List.of("passwords","droneTokens"))
             for(Object value:object(credentials.get(group)).values())if(value instanceof String text&&!text.isEmpty())secrets.add(text);
@@ -122,7 +122,7 @@ public final class RetainedDemoInspector {
     }
     /** Verify every original formal object, including originals outside the retained demonstration tasks. */
     private void originalObjects(Path baselinePath)throws Exception {
-        var baseline=object(JSON.readValue(Files.readAllBytes(baselinePath),Map.class));
+        var baseline=object(JSON.readValue(Files.readAllBytes(baselinePath),new TypeReference<Map<String,Object>>() {}));
         check(Boolean.TRUE.equals(baseline.get("passed")),"passing_original_object_baseline_required");
         Snapshot original=JSON.convertValue(baseline.get("snapshot"),Snapshot.class);
         check(hash(JSON.writeValueAsBytes(original)).equals(baseline.get("snapshotSha256")),"original_object_baseline_digest_consistent");
@@ -157,7 +157,7 @@ public final class RetainedDemoInspector {
         Input input=JSON.readValue(Files.readAllBytes(inputPath),Input.class);validate(input);
         Path baselinePath=Path.of(input.preflightReport()).toAbsolutePath().normalize();
         check(!baselinePath.equals(output),"original_preflight_not_overwritten");
-        var baseline=object(JSON.readValue(Files.readAllBytes(baselinePath),Map.class));
+        var baseline=object(JSON.readValue(Files.readAllBytes(baselinePath),new TypeReference<Map<String,Object>>() {}));
         check(Boolean.TRUE.equals(baseline.get("passed"))&&"preflight".equals(baseline.get("phase"))
                 &&number(baseline,"formatVersion")==1,"passing_preflight_required");
         Snapshot original=JSON.convertValue(baseline.get("snapshot"),Snapshot.class);
@@ -171,7 +171,7 @@ public final class RetainedDemoInspector {
             if(input.recheckPreflightReport()!=null) {
                 Path freshPath=Path.of(input.recheckPreflightReport()).toAbsolutePath().normalize();
                 check(!freshPath.equals(output),"fresh_recheck_preflight_not_overwritten");
-                var fresh=object(JSON.readValue(Files.readAllBytes(freshPath),Map.class));
+                var fresh=object(JSON.readValue(Files.readAllBytes(freshPath),new TypeReference<Map<String,Object>>() {}));
                 check(Boolean.TRUE.equals(fresh.get("passed"))&&"preflight".equals(fresh.get("phase"))
                         &&number(fresh,"formatVersion")==1,"passing_fresh_recheck_preflight_required");
                 Snapshot freshSnapshot=JSON.convertValue(fresh.get("snapshot"),Snapshot.class);

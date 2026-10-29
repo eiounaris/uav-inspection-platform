@@ -119,7 +119,10 @@ class OutboxTransactionsTest {
     private static Delivery delivery(int attempt) { return new Delivery(EVENT.eventId(),EVENT.eventType(),EVENT.bizId(),PAYLOAD,TOKEN,attempt); }
     private OutboxTransactions transactional() {
         var proxy=new ProxyFactory(new OutboxTransactions(mapper)); proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (OutboxTransactions)proxy.getProxy();
     }
     private static final class RecordingManager extends AbstractPlatformTransactionManager {

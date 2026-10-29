@@ -71,8 +71,7 @@ class S3DownloadUrlSignerTest {
         return S3Presigner.builder().endpointOverride(URI.create("http://127.0.0.1:9000"))
                 .region(Region.of("garage")).credentialsProvider(StaticCredentialsProvider.create(
                         AwsBasicCredentials.create("synthetic-access-key","synthetic-private-secret")))
-                .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true)
-                        .checksumValidationEnabled(false).build()).build();
+                .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build()).build();
     }
     private static Map<String,String> query(URI uri) {
         Map<String,String> result=new HashMap<>();

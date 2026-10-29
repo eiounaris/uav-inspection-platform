@@ -312,7 +312,10 @@ class TaskAcceptanceServiceTest {
         var permissions=new ResourcePermissionService(identities,authentication,memberships);
         var proxy=new ProxyFactory(new TaskService(tasks,permissions,audit,Clock.fixed(DATABASE_NOW.plusSeconds(3600),ZoneOffset.UTC)));
         proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (TaskService)proxy.getProxy();
     }
     private static CurrentUser actor(String id,String org,Role role) { return new CurrentUser(id,org,"test",List.of(role),0,0); }

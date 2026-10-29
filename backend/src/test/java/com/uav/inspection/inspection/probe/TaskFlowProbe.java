@@ -6,6 +6,7 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.server.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import javax.sql.DataSource;
@@ -584,7 +585,7 @@ public final class TaskFlowProbe {
         requests.add(Map.of("case", name, "status", response.statusCode(), "traceId", trace));
         require(response.headers().firstValue("Content-Type").orElse("").contains("application/json"),
                 name + "_json_content_type");
-        Map<String, Object> envelope = JSON.readValue(response.body(), Map.class);
+        Map<String, Object> envelope = JSON.readValue(response.body(),new TypeReference<Map<String,Object>>() {});
         require(envelope.keySet().equals(Set.of("code", "message", "data", "traceId")), name + "_uniform_envelope");
         require(trace.equals(response.headers().firstValue("X-Trace-Id").orElse(null))
                         && trace.equals(envelope.get("traceId")), name + "_trace_header_and_body");

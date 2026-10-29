@@ -64,7 +64,10 @@ class MessageRejectionRecorderTest {
         var transactions = new TestTransactions();
         var proxy = new ProxyFactory(recorder);
         proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(transactions, new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(transactions);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         var transactional = (MessageRejectionRecorder) proxy.getProxy();
         transactional.record("FILE_FINALIZE", new byte[0], "UNKNOWN_EVENT", null);
         assertEquals(1, transactions.commits);

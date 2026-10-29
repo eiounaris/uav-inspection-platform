@@ -208,7 +208,10 @@ class AuditQueryServiceTest {
 
     private AuditQueryService transactional() {
         var proxy=new ProxyFactory(new AuditQueryService(mapper,permissions)); proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (AuditQueryService)proxy.getProxy();
     }
     private static CurrentUser actor(Role role) {

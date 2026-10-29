@@ -96,7 +96,10 @@ class VerificationTransactionsTest {
     private VerificationTransactions transactions() {
         var proxy=new ProxyFactory(new VerificationTransactions(mapper,permissions,audit));
         proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (VerificationTransactions)proxy.getProxy();
     }
     private static final class RecordingManager extends AbstractPlatformTransactionManager {

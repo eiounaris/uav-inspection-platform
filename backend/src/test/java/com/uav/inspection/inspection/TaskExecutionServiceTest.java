@@ -216,7 +216,10 @@ class TaskExecutionServiceTest {
     private TaskService transactional() {
         var proxy=new ProxyFactory(new TaskService(tasks,permissions,audit,Clock.fixed(NOW.plusSeconds(600),ZoneOffset.UTC)));
         proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (TaskService)proxy.getProxy();
     }
     private static TaskSummary task(String status) {

@@ -7,18 +7,9 @@ import com.uav.inspection.blockchain.anchor.AnchorProcessor;
 import com.uav.inspection.blockchain.anchor.AnchorTransactions;
 import com.uav.inspection.blockchain.anchor.persistence.AnchorMapper;
 import com.uav.inspection.common.lease.ProcessingLeaseKeeper;
-import java.io.FilterInputStream;
-import java.io.IOException;
-import com.uav.inspection.common.error.BusinessException;
-import com.uav.inspection.common.error.ErrorCode;
 import com.uav.inspection.evidence.finalization.FinalizationProcessor;
-import com.uav.inspection.evidence.finalization.FinalizationTransactions;
-import com.uav.inspection.evidence.finalization.persistence.FinalizationMapper;
 import com.uav.inspection.evidence.storage.ObjectStorage;
-import com.uav.inspection.evidence.upload.persistence.UploadMapper;
 import com.uav.inspection.messaging.*;
-import org.springframework.amqp.core.*;
-import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -28,14 +19,13 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.web.server.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.context.annotation.*;
-import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.transaction.annotation.Transactional;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import javax.imageio.ImageIO;
@@ -44,7 +34,6 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -70,6 +59,7 @@ import io.grpc.Status;
 /** Real T024 manual recovery, current task permission, immutable checkpoints and permanent failures. */
 public final class AnchorRetryFlowProbe {
     private static final JsonMapper JSON=JsonMapper.builder().build();
+    private static final TypeReference<Map<String, Object>> JSON_OBJECT_TYPE = new TypeReference<>() {};
     private static final String API="/api/v1",OWNER="00000000-0000-4000-8000-000000000001",OPERATOR="00000000-0000-4000-8000-000000000002";
     private static final Map<String,String> TABLE_ORDER=new LinkedHashMap<>();
     static {
@@ -88,7 +78,7 @@ public final class AnchorRetryFlowProbe {
     private final Set<String> uploadIds=new LinkedHashSet<>(),taskIds=new LinkedHashSet<>();
     private final Map<String,String> expectedDigests=new LinkedHashMap<>();
     private JdbcTemplate jdbc;private DataSource dataSource;private S3Client s3;private ObjectStorage storage;
-    private InstitutionLedgerClients clients,realClients;private RabbitTemplate rabbit;private OutboxPublisher publisher;
+    private InstitutionLedgerClients realClients;private RabbitTemplate rabbit;private OutboxPublisher publisher;
     private FinalizationProcessor processor;private AnchorProcessor anchorProcessor;private AnchorTransactions anchorPhases;
     private AnchorMapper anchors;private FaultPlan faults;private HttpClient client;
     private SimpleMessageListenerContainer finalizeContainer,anchorContainer;
@@ -111,7 +101,7 @@ public final class AnchorRetryFlowProbe {
                 "--inspection.messaging.dead-letter-queue="+deadQueue,"--inspection.messaging.publisher-enabled=true",
                 "--inspection.messaging.recovery-enabled=false","--inspection.ledger.recovery-enabled=false")){
             jdbc=context.getBean(JdbcTemplate.class);dataSource=context.getBean(DataSource.class);s3=context.getBean(S3Client.class);
-            storage=context.getBean(ObjectStorage.class);clients=context.getBean(InstitutionLedgerClients.class);
+            storage=context.getBean(ObjectStorage.class);context.getBean(InstitutionLedgerClients.class);
             realClients=context.getBean("institutionLedgerClients",InstitutionLedgerClients.class);
             rabbit=context.getBean(RabbitTemplate.class);publisher=context.getBean(OutboxPublisher.class);
             processor=context.getBean(FinalizationProcessor.class);anchorProcessor=context.getBean(AnchorProcessor.class);
@@ -259,7 +249,6 @@ public final class AnchorRetryFlowProbe {
     private void cleanupOwnedQueues(){Set<String> events=new HashSet<>();for(String task:taskIds)events.addAll(jdbc.queryForList("SELECT event_id FROM outbox_event WHERE biz_id IN (SELECT id FROM upload_session WHERE task_id=?) OR biz_id IN (SELECT id FROM chain_submission WHERE version_id IN (SELECT id FROM evidence_version WHERE task_id=?))",String.class,task,task));rabbit.execute(channel->{for(String queue:List.of(finalizeQueue,anchorQueue,deadQueue))while(true){var delivery=channel.basicGet(queue,false);if(delivery==null)break;MessageEvent e=MessageEvent.decode(delivery.getBody());require(events.contains(e.eventId())&&sharedTrace.equals(e.traceId()),"cleanup_drains_only_owned_business_events");channel.basicAck(delivery.getEnvelope().getDeliveryTag(),false);}return null;});}
     private void openDatabase(){var source=new DriverManagerDataSource();source.setUrl("jdbc:mysql://"+env("DB_HOST","127.0.0.1")+":"+env("DB_PORT","3306")+"/"+env("DB_NAME","uav_inspection")+"?sslMode="+env("DB_SSL_MODE","REQUIRED")+"&connectionTimeZone=%2B00:00&forceConnectionTimeZoneToSession=true&preserveInstants=true&characterEncoding=UTF-8");source.setUsername(env("DB_USERNAME","uav_app"));source.setPassword(env("DB_PASSWORD",null));jdbc=new JdbcTemplate(source);dataSource=source;}
 
-
     private void createFixtures()throws Exception{
         account(OWNER,"owner",List.of("ORG_ADMIN","OWNER_TASK_ADMIN","OWNER_REVIEWER","OWNER_DATA_APPROVER"));account(OPERATOR,"admin",List.of("ORG_ADMIN","OPERATOR_TASK_ADMIN"));account(OPERATOR,"uploader",List.of("OPERATOR_USER"));account(OPERATOR,"outside-admin",List.of("OPERATOR_TASK_ADMIN"));account(OPERATOR,"role-admin",List.of("OPERATOR_TASK_ADMIN"));account(OPERATOR,"member-admin",List.of("OPERATOR_TASK_ADMIN"));account(OPERATOR,"disabled-admin",List.of("OPERATOR_TASK_ADMIN"));
         for(Account a:accounts)login(a);var result=expect("register_own_device","POST",API+"/drones",admin(),Map.of("code","T024-"+runId.substring(0,12)),200).data();deviceId=string(object(result.get("device")).get("id"));deviceToken=string(result.get("deviceToken"));secrets.add(deviceToken);
@@ -281,17 +270,25 @@ public final class AnchorRetryFlowProbe {
     private Reply expect(String name,String method,String path,Account actor,Object body,int status)throws Exception{Reply result=requestHeaders(name,method,path,actor==null?Map.of():Map.of("Authorization","Bearer "+actor.token),body==null?null:JSON.writeValueAsBytes(body),body==null?null:"application/json");assertCode(result,status,status==200||status==202?"OK":status==400?"INVALID_ARGUMENT":status==401?"UNAUTHORIZED":status==403?"FORBIDDEN":"VERSION_CONFLICT",name);return result;}
     private void assertCode(Reply reply,int status,String code,String name){require(reply.status==status,name+"_http_"+status);require(code.equals(reply.body.get("code")),name+"_code");}
     private Reply requestHeaders(String name,String method,String path,Map<String,String> headers,byte[] bytes,String type)throws Exception{
-        var builder=HttpRequest.newBuilder(URI.create(baseUrl+path)).timeout(Duration.ofSeconds(30)).header("X-Trace-Id",sharedTrace).header("Accept","application/json");headers.forEach(builder::header);if(type!=null)builder.header("Content-Type",type);builder.method(method,bytes==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofByteArray(bytes));var response=client.send(builder.build(),HttpResponse.BodyHandlers.ofByteArray());requests.add(Map.of("case",name,"status",response.statusCode(),"traceId",sharedTrace));require(response.headers().firstValue("Content-Type").orElse("").contains("application/json"),name+"_json");String text=new String(response.body(),StandardCharsets.UTF_8);boolean signed=path.endsWith("/download-url")&&response.statusCode()==200,credential=path.equals(API+"/auth/login")||path.equals(API+"/drones")&&method.equals("POST");if(!signed)require((credential||secrets.stream().noneMatch(text::contains))&&!text.contains("object_key")&&!text.contains("objectKey")&&!text.contains("upload-parts/")&&!text.contains("evidence-files/")&&!text.contains("transactionBytes")&&!text.contains("commitBytes")&&!text.contains("X-Amz-"),name+"_safe_response");Map<String,Object> envelope=JSON.readValue(response.body(),Map.class);require(envelope.keySet().equals(Set.of("code","message","data","traceId")),name+"_uniform_envelope");require(sharedTrace.equals(envelope.get("traceId"))&&sharedTrace.equals(response.headers().firstValue("X-Trace-Id").orElse(null)),name+"_shared_trace_is_preserved");return new Reply(response.statusCode(),envelope);
+        var builder=HttpRequest.newBuilder(URI.create(baseUrl+path)).timeout(Duration.ofSeconds(30)).header("X-Trace-Id",sharedTrace).header("Accept","application/json");headers.forEach(builder::header);if(type!=null)builder.header("Content-Type",type);builder.method(method,bytes==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofByteArray(bytes));var response=client.send(builder.build(),HttpResponse.BodyHandlers.ofByteArray());requests.add(Map.of("case",name,"status",response.statusCode(),"traceId",sharedTrace));require(response.headers().firstValue("Content-Type").orElse("").contains("application/json"),name+"_json");String text=new String(response.body(),StandardCharsets.UTF_8);boolean signed=path.endsWith("/download-url")&&response.statusCode()==200,credential=path.equals(API+"/auth/login")||path.equals(API+"/drones")&&method.equals("POST");if(!signed)require((credential||secrets.stream().noneMatch(text::contains))&&!text.contains("object_key")&&!text.contains("objectKey")&&!text.contains("upload-parts/")&&!text.contains("evidence-files/")&&!text.contains("transactionBytes")&&!text.contains("commitBytes")&&!text.contains("X-Amz-"),name+"_safe_response");Map<String,Object> envelope=JSON.readValue(response.body(), JSON_OBJECT_TYPE);require(envelope.keySet().equals(Set.of("code","message","data","traceId")),name+"_uniform_envelope");require(sharedTrace.equals(envelope.get("traceId"))&&sharedTrace.equals(response.headers().firstValue("X-Trace-Id").orElse(null)),name+"_shared_trace_is_preserved");return new Reply(response.statusCode(),envelope);
     }
     private void writeReport()throws Exception{report.put("caseCount",requests.size());report.put("checkCount",checks.size());byte[] content=JSON.writerWithDefaultPrettyPrinter().writeValueAsBytes(report);String text=new String(content,StandardCharsets.UTF_8);if(secrets.stream().anyMatch(text::contains)||text.contains("upload-parts/")||text.contains("evidence-files/")||text.contains("X-Amz-")||text.contains("Signature="))throw new ProbeFailure("unsafe_report");Files.createDirectories(reportPath.getParent());Path tmp=Files.createTempFile(reportPath.getParent(),".reliability-",".tmp",PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));try{Files.write(tmp,content);Files.move(tmp,reportPath,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);}finally{Files.deleteIfExists(tmp);}}
     private void require(boolean value,String name){checks.add(Map.of("check",name,"passed",value));if(!value)throw new ProbeFailure(name);}
     private Account owner(){return accounts.getFirst();}private Account admin(){return accounts.get(1);}private Account uploader(){return accounts.get(2);}
-    private static String env(String key,String fallback){String value=System.getenv(key);if(value==null||value.isBlank()){if(fallback==null)throw new ProbeFailure("missing_required_environment");return fallback;}return value;}private static long version(Map<String,Object> row){return number(row.get("lockVersion"));}private static long number(Object value){if(!(value instanceof Number n))throw new ProbeFailure("expected_number");return n.longValue();}private static String string(Object value){if(!(value instanceof String text))throw new ProbeFailure("expected_string");return text;}private static Instant instant(Object value){if(value instanceof java.time.LocalDateTime t)return t.toInstant(java.time.ZoneOffset.UTC);if(value instanceof java.sql.Timestamp t)return t.toInstant();if(value instanceof Instant t)return t;throw new ProbeFailure("expected_jdbc_utc_timestamp");}
-    @SuppressWarnings("unchecked")private static Map<String,Object> object(Object value){if(!(value instanceof Map))throw new ProbeFailure("expected_object");return (Map<String,Object>)value;}private static List<Map<String,Object>> objects(Object value){if(!(value instanceof List<?> list))throw new ProbeFailure("expected_array");return list.stream().map(AnchorRetryFlowProbe::object).toList();}private static String sha256(byte[] bytes)throws Exception{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));}private static void frame(MessageDigest digest,String value){byte[] bytes=value==null?null:value.getBytes(StandardCharsets.UTF_8);digest.update(ByteBuffer.allocate(4).putInt(bytes==null?-1:bytes.length).array());if(bytes!=null)digest.update(bytes);}
+    private static String env(String key,String fallback){String value=System.getenv(key);if(value==null||value.isBlank()){if(fallback==null)throw new ProbeFailure("missing_required_environment");return fallback;}return value;}private static long version(Map<String,Object> row){return number(row.get("lockVersion"));}private static long number(Object value){if(!(value instanceof Number n))throw new ProbeFailure("expected_number");return n.longValue();}private static String string(Object value){if(!(value instanceof String text))throw new ProbeFailure("expected_string");return text;}
+    private static Map<String, Object> object(Object value) {
+        if (!(value instanceof Map<?, ?> map)) throw new ProbeFailure("expected_object");
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (var entry : map.entrySet()) {
+            if (!(entry.getKey() instanceof String key)) throw new ProbeFailure("expected_object");
+            result.put(key, entry.getValue());
+        }
+        return result;
+    }
+    private static List<Map<String,Object>> objects(Object value){if(!(value instanceof List<?> list))throw new ProbeFailure("expected_array");return list.stream().map(AnchorRetryFlowProbe::object).toList();}private static String sha256(byte[] bytes)throws Exception{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));}private static void frame(MessageDigest digest,String value){byte[] bytes=value==null?null:value.getBytes(StandardCharsets.UTF_8);digest.update(ByteBuffer.allocate(4).putInt(bytes==null?-1:bytes.length).array());if(bytes!=null)digest.update(bytes);}
     private static byte[] png(int color)throws Exception{var image=new BufferedImage(8,8,BufferedImage.TYPE_INT_RGB);for(int x=0;x<8;x++)for(int y=0;y<8;y++)image.setRGB(x,y,color);var output=new ByteArrayOutputStream();if(!ImageIO.write(image,"png",output))throw new ProbeFailure("png_encoder_unavailable");return output.toByteArray();}
     private static final class Account{final String id,username,password;String token;Account(String id,String username,String password){this.id=id;this.username=username;this.password=password;}@Override public String toString(){return "RetryAccount["+id+"]";}}private record Scope(String task,String requirement,String subtask,String execution){}private record Reply(int status,Map<String,Object> body){Map<String,Object> data(){return object(body.get("data"));}@Override public String toString(){return "RetryReply["+status+"]";}}private static final class ProbeFailure extends RuntimeException{ProbeFailure(String name){super(name);}}
     private void await(BooleanSupplier condition,String name)throws Exception {long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(40);while(System.nanoTime()<deadline){if(condition.getAsBoolean()){require(true,name);return;}Thread.sleep(100);}require(false,name);}
-    private void awaitSeconds(BooleanSupplier condition,String name,int seconds)throws Exception {long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(seconds);while(System.nanoTime()<deadline){if(condition.getAsBoolean()){require(true,name);return;}Thread.sleep(100);}require(false,name);}
     private static byte[] blob(Object value)throws Exception{if(value instanceof byte[] bytes)return bytes;if(value instanceof java.sql.Blob blob)return blob.getBytes(1,(int)blob.length());throw new ProbeFailure("expected_binary_checkpoint");}
     private long count(String sql,Object...args){Long value=jdbc.queryForObject(sql,Long.class,args);if(value==null)throw new ProbeFailure("missing_sql_count");return value;}
     private Map<String,Long> businessCounts(){Map<String,Long> result=new LinkedHashMap<>();TABLE_ORDER.keySet().forEach(t->result.put(t,count("SELECT COUNT(*) FROM "+t)));return result;}

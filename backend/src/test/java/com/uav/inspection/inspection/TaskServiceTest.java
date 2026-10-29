@@ -177,7 +177,10 @@ class TaskServiceTest {
         var target = new TaskService(tasks, permissions, audit, Clock.fixed(NOW, ZoneOffset.UTC));
         var proxy = new ProxyFactory(target);
         proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(transactions, new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(transactions);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (TaskService) proxy.getProxy();
     }
 

@@ -123,10 +123,12 @@ class UploadServiceTest {
         }).when(storage).put(anyString(),any(Path.class),eq("image/png"));
         when(phases.storePart(eq(ACTOR),eq(UPLOAD),eq(1),eq((long)image.length),anyString(),anyString()))
                 .thenAnswer(call->{
-                    var sweep=new TemporaryFileManager().sweep(temporaryDirectory,Duration.ofSeconds(60),100);
-                    assertTrue(sweep.locked()>0);assertEquals(0,sweep.deleted());
-                    assertArrayEquals(image,Files.readAllBytes(spool.get()));
-                    return new PartCommit(result(call.getArgument(4)),call.getArgument(5));
+                    try (var sweeper = new TemporaryFileManager()) {
+                        var sweep=sweeper.sweep(temporaryDirectory,Duration.ofSeconds(60),100);
+                        assertTrue(sweep.locked()>0);assertEquals(0,sweep.deleted());
+                        assertArrayEquals(image,Files.readAllBytes(spool.get()));
+                        return new PartCommit(result(call.getArgument(4)),call.getArgument(5));
+                    }
                 });
         var service=proxy(new UploadService(settings,storage,phases,new TemporaryFileManager()));
         service.uploadPart(ACTOR,UPLOAD,1,body(),image.length);
@@ -422,7 +424,10 @@ class UploadServiceTest {
     private <T> T proxy(T target) {
         var proxy = new ProxyFactory(target);
         proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(transactionManager, new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(transactionManager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (T) proxy.getProxy();
     }
 

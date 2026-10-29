@@ -9,37 +9,16 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
-import javax.imageio.ImageIO;
 import javax.sql.DataSource;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.FilterInputStream;
 import java.io.InputStream;
-import java.io.IOException;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.net.Socket;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
-import com.uav.inspection.messaging.OutboxPublisher;
-import com.uav.inspection.evidence.finalization.FinalizationProcessor;
-import java.util.concurrent.atomic.AtomicReference;
-import org.springframework.amqp.core.Message;
-import org.springframework.amqp.core.MessageProperties;
-import org.springframework.amqp.core.MessageDeliveryMode;
-import org.springframework.amqp.rabbit.core.RabbitAdmin;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
-import com.rabbitmq.client.AMQP;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
-import org.springframework.context.annotation.Profile;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -57,7 +36,6 @@ import java.sql.ResultSet;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HexFormat;
@@ -72,11 +50,11 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-import java.util.zip.CRC32;
 
 /** Explicit real HTTP/MySQL/Redis/Garage probe. Never runs as an ordinary unit test. */
 public final class DeviceFlowProbe {
     private static final JsonMapper JSON = JsonMapper.builder().build();
+    private static final TypeReference<Map<String, Object>> JSON_OBJECT_TYPE = new TypeReference<>() {};
     private static final String OWNER = "00000000-0000-4000-8000-000000000001";
     private static final String OPERATOR = "00000000-0000-4000-8000-000000000002";
     private static final String API = "/api/v1";
@@ -126,8 +104,6 @@ public final class DeviceFlowProbe {
     private String storageEndpoint;
     private String bucket;
     private String taskId;
-    private String droneId;
-    private String droneCode;
     private Scope firstScope;
     private Scope secondScope;
 
@@ -203,7 +179,6 @@ public final class DeviceFlowProbe {
             secrets.add(account.token);
         }
         devices.add(createDevice("first"));devices.add(createDevice("second"));
-        droneId=devices.getFirst().id;droneCode=devices.getFirst().code;
         report.put("fixtureAccountIds",accounts.stream().map(account->account.id).toList());
         report.put("fixtureDeviceIds",devices.stream().map(device->device.id).toList());
     }
@@ -213,7 +188,7 @@ public final class DeviceFlowProbe {
         random.nextBytes(entropy);
         String password = Base64.getUrlEncoder().withoutPadding().encodeToString(entropy);
         secrets.add(password);
-        var account = new Account(UUID.randomUUID().toString(), org,
+        var account = new Account(UUID.randomUUID().toString(),
                 "t015-" + runId.substring(0, 12) + "-" + suffix, password);
         accounts.add(account);
         String encoded = new BCryptPasswordEncoder(12).encode(password);
@@ -261,30 +236,6 @@ public final class DeviceFlowProbe {
         report.put("fixtureTaskId", taskId);
         createOtherRunningTask();
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     private Device createDevice(String suffix)throws Exception {
         String code="T015-"+runId.substring(0,12)+"-"+suffix;
@@ -467,34 +418,8 @@ public final class DeviceFlowProbe {
     private static Map<String,Object> event(String boot,long seq,String event,String execution,String type,Integer progress){var body=new LinkedHashMap<String,Object>();body.put("bootId",boot);body.put("seq",seq);body.put("eventId",event);body.put("executionId",execution);body.put("type",type);if(progress!=null)body.put("progress",progress);return body;}
     private static final class Device {final String id,code,token;Device(String id,String code,String token){this.id=id;this.code=code;this.token=token;}@Override public String toString(){return "ProbeDevice["+id+"]";}}
 
-
-    private String uploadFile(String label,Scope scope,byte[] bytes,String type,String filename)throws Exception {
-        Account uploader=accounts.get(2);
-        String id=createSession(label,uploader,createBody(UUID.randomUUID().toString(),scope,filename,type,bytes.length));
-        int size=jdbc.queryForObject("SELECT part_size FROM upload_session WHERE id=?",Integer.class,id);
-        int parts=1+(bytes.length-1)/size;
-        // Deliberately reverse transfer order; worker must merge by durable part number.
-        for(int partNo=parts;partNo>=1;partNo--) {
-            byte[] part=Arrays.copyOfRange(bytes,(partNo-1)*size,Math.min(partNo*size,bytes.length));
-            part(label+"_part_"+partNo,id,partNo,uploader.token,part,200,"OK");
-        }
-        return id;
-    }
-
-
-
-
-
-    private String status(String upload){return jdbc.queryForObject("SELECT status FROM upload_session WHERE id=?",String.class,upload);}
-    private String lastError(String upload){return jdbc.queryForObject("SELECT last_error FROM upload_session WHERE id=?",String.class,upload);}
-
-
-
-    private long versionCount(String upload){return count("SELECT COUNT(*) FROM evidence_version WHERE upload_session_id=?",upload);}
-    private long outboxCount(String upload){return count("SELECT COUNT(*) FROM outbox_event WHERE biz_id=?",upload);}
     private long count(String sql,Object...args){Long count=jdbc.queryForObject(sql,Long.class,args);if(count==null)throw new ProbeFailure("missing_count");return count;}
 
-    private static String completePath(String upload){return sessionPath(upload)+"/complete";}
     private void await(BooleanSupplier condition,String name)throws Exception {
         long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(30);
         while(System.nanoTime()<deadline){if(condition.getAsBoolean()){require(true,name);return;}Thread.sleep(100);}
@@ -540,50 +465,6 @@ public final class DeviceFlowProbe {
         for(String upload:uploadIds)require(objectKeys(upload).isEmpty(),"only_owned_device_upload_objects_are_cleaned");
         report.put("fixtureTasksDeleted",tasks.size());report.put("fixtureAccountsDeleted",accounts.size());report.put("fixtureDevicesDeleted",devices.size());
         report.put("fixtureUploadSessionsDeleted",uploadIds.size());report.put("fixturePrivateObjectsDeleted",keys.size());
-    }
-
-
-    private String createSession(String name, Account actor, Map<String, Object> body) throws Exception {
-        Reply reply = expect(name, "POST", uploadPath(), actor.token, body, 200);
-        String id = string(reply.data().get("uploadId"));
-        uploadIds.add(id);
-        successAudit(reply, "UPLOAD_SESSION_CREATED");
-        return id;
-    }
-
-    private Map<String, Object> progress(String id, Account actor) throws Exception {
-        return expect("read_upload_progress", "GET", sessionPath(id), actor.token, null, 200).data();
-    }
-
-    private Reply part(String name, String id, int number, String token, byte[] bytes, int status, String code)
-            throws Exception {
-        Reply reply = request(name, "PUT", partPath(id, number), token, bytes, true);
-        assertStatus(reply, name, status, code);
-        if (status >= 400) noUploadAudit(reply);
-        return reply;
-    }
-
-    private List<Reply> race(String name, String method, String path, String token, Object a, Object b, boolean raw)
-            throws Exception {
-        var start = new CountDownLatch(1);
-        var ready = new CountDownLatch(2);
-        CompletableFuture<Reply> first = parallel(name + "_a", method, path, token, a, raw, start, ready);
-        CompletableFuture<Reply> second = parallel(name + "_b", method, path, token, b, raw, start, ready);
-        require(ready.await(10, TimeUnit.SECONDS), name + "_requests_ready");
-        start.countDown();
-        CompletableFuture.allOf(first, second).get(45, TimeUnit.SECONDS);
-        return List.of(first.get(), second.get());
-    }
-
-    private CompletableFuture<Reply> parallel(String name, String method, String path, String token, Object body,
-            boolean raw, CountDownLatch start, CountDownLatch ready) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                ready.countDown();
-                if (!start.await(10, TimeUnit.SECONDS)) throw new ProbeFailure("parallel_start_timeout");
-                return request(name, method, path, token, body, raw);
-            } catch (Exception failure) { throw new ProbeFailure("parallel_http_request_failure"); }
-        });
     }
 
     private Reply expect(String name, String method, String path, String token, Object body, int status) throws Exception {
@@ -632,31 +513,12 @@ public final class DeviceFlowProbe {
                         && !text.contains("transaction_bytes") && !text.contains("commit_bytes")
                         && !text.contains(storageEndpoint) && secrets.stream().noneMatch(text::contains),
                 name + "_response_does_not_expose_private_storage_or_credentials");
-        Map<String, Object> envelope = JSON.readValue(response.body(), Map.class);
+        Map<String, Object> envelope = JSON.readValue(response.body(), JSON_OBJECT_TYPE);
         require(envelope.keySet().equals(Set.of("code", "message", "data", "traceId")), name + "_uniform_envelope");
         require(trace.equals(response.headers().firstValue("X-Trace-Id").orElse(null))
                         && trace.equals(envelope.get("traceId")), name + "_trace_header_and_body");
         if(response.statusCode()==401)require((path.startsWith(API+"/device/")?"Device":"Bearer").equals(response.headers().firstValue("WWW-Authenticate").orElse(null)),name+"_correct_identity_challenge");
         return new Reply(response.statusCode(), envelope, trace);
-    }
-
-    private long partCount(String id) {
-        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM upload_part WHERE session_id=?", Long.class, id);
-        require(count != null, "part_count_present");
-        return count;
-    }
-
-    private long actionCount(String action) {
-        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM audit_log WHERE trace_id LIKE ? AND action=?", Long.class,
-                "t015-" + runId + "-%", action);
-        require(count != null, "audit_count_present");
-        return count;
-    }
-
-    private void successAudit(Reply reply, String action) {
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT action,result FROM audit_log WHERE trace_id=?", reply.trace());
-        require(rows.size() == 1 && action.equals(rows.getFirst().get("action"))
-                        && "SUCCESS".equals(rows.getFirst().get("result")), action.toLowerCase() + "_has_one_success_audit");
     }
 
     private void noUploadAudit(Reply reply) {
@@ -730,44 +592,12 @@ public final class DeviceFlowProbe {
         if (!condition) throw new ProbeFailure(name);
     }
 
-    private static byte[] png(int color) throws Exception {
-        var image = new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB);
-        for (int x = 0; x < 8; x++) for (int y = 0; y < 8; y++) image.setRGB(x, y, color);
-        var output = new ByteArrayOutputStream();
-        if (!ImageIO.write(image, "png", output)) throw new ProbeFailure("png_writer_unavailable");
-        return output.toByteArray();
-    }
-
-    private static byte[] padPng(byte[] png, int targetSize) throws Exception {
-        if (targetSize < png.length + 18) throw new ProbeFailure("png_padding_too_small");
-        byte[] text = new byte[targetSize - png.length - 12];
-        Arrays.fill(text, (byte) 'p');
-        System.arraycopy("probe\0".getBytes(StandardCharsets.ISO_8859_1), 0, text, 0, 6);
-        byte[] type = "tEXt".getBytes(StandardCharsets.ISO_8859_1);
-        CRC32 crc = new CRC32();
-        crc.update(type);
-        crc.update(text);
-        var bytes = new ByteArrayOutputStream(targetSize);
-        try (var output = new DataOutputStream(bytes)) {
-            output.write(png, 0, png.length - 12);
-            output.writeInt(text.length);
-            output.write(type);
-            output.write(text);
-            output.writeInt((int) crc.getValue());
-            output.write(png, png.length - 12, 12);
-        }
-        return bytes.toByteArray();
-    }
-
     private static Map<String, Object> createBody(String request, Scope scope, String filename, String type, long size) {
         return Map.of("clientRequestId", request, "requirementId", scope.requirementId(), "executionId", scope.executionId(),
                 "filename", filename, "contentType", type, "size", size);
     }
 
     private String taskPath() { return API + "/tasks/" + taskId; }
-    private static String uploadPath() { return API + "/upload-sessions"; }
-    private static String sessionPath(String id) { return uploadPath() + "/" + id; }
-    private static String partPath(String id, int number) { return sessionPath(id) + "/parts/" + number; }
     private static String sha256(byte[] bytes) throws Exception {
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
     }
@@ -783,8 +613,13 @@ public final class DeviceFlowProbe {
     }
 
     private static Map<String, Object> object(Object value) {
-        if (!(value instanceof Map<?, ?>)) throw new ProbeFailure("expected_json_object");
-        return (Map<String, Object>) value;
+        if (!(value instanceof Map<?, ?> map)) throw new ProbeFailure("expected_json_object");
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (var entry : map.entrySet()) {
+            if (!(entry.getKey() instanceof String key)) throw new ProbeFailure("expected_json_object");
+            result.put(key, entry.getValue());
+        }
+        return result;
     }
 
     private static List<Map<String, Object>> objects(Object value) {
@@ -799,8 +634,8 @@ public final class DeviceFlowProbe {
     }
 
     private static final class Account {
-        final String id,org,username,password; String token;
-        Account(String id,String org,String username,String password){this.id=id;this.org=org;this.username=username;this.password=password;}
+        final String id,username,password; String token;
+        Account(String id,String username,String password){this.id=id;this.username=username;this.password=password;}
         @Override public String toString(){return "PipelineProbeAccount["+id+"]";}
     }
     private record Scope(String requirementId,String executionId,String subtaskId) {}
@@ -809,8 +644,6 @@ public final class DeviceFlowProbe {
         @Override public String toString(){return "PipelineProbeReply["+status+","+trace+"]";}
     }
     private static final class ProbeFailure extends RuntimeException { ProbeFailure(String name){super(name);} }
-
-
 
     /** Minimal real RESP client for observing this probe's private cache namespace, never for business decisions. */
     private static final class Redis {

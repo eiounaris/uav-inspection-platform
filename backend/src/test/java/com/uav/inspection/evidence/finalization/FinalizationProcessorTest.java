@@ -123,10 +123,12 @@ class FinalizationProcessorTest {
             return null;
         }).when(storage).put(anyString(),any(Path.class),anyString());
         when(phases.finish(eq(claim),anyString(),eq((long)image.length),anyString())).thenAnswer(call->{
-            var sweep=new TemporaryFileManager().sweep(settings.tempDirectory(),Duration.ofSeconds(60),100);
-            assertTrue(sweep.locked()>0);assertEquals(0,sweep.deleted());
-            assertArrayEquals(image,Files.readAllBytes(temporary.get()));
-            return true;
+            try (var sweeper = new TemporaryFileManager()) {
+                var sweep=sweeper.sweep(settings.tempDirectory(),Duration.ofSeconds(60),100);
+                assertTrue(sweep.locked()>0);assertEquals(0,sweep.deleted());
+                assertArrayEquals(image,Files.readAllBytes(temporary.get()));
+                return true;
+            }
         });
         new FinalizationProcessor(phases,storage,settings,ProcessingLeaseKeeper.unmonitored(),new TemporaryFileManager())
                 .process(EVENT);
@@ -431,7 +433,10 @@ class FinalizationProcessorTest {
             protected void doCommit(DefaultTransactionStatus status){}
             protected void doRollback(DefaultTransactionStatus status){}
         };
-        factory.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        factory.addAdvice(interceptor);
         return (FinalizationProcessor)factory.getProxy();
     }
 

@@ -20,6 +20,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import javax.sql.DataSource;
@@ -214,7 +215,7 @@ public final class SwarmFlowProbe {
             if(!process.waitFor(90,TimeUnit.SECONDS)){process.destroyForcibly();throw new ProbeFailure("simulator_timeout");}
             require(process.exitValue()==0,"three_parallel_devices_survive_outage_and_replay");
         } finally {Files.deleteIfExists(config);}
-        Map<String,Object> result=JSON.readValue(Files.readAllBytes(state.resolve("summary.json")),Map.class);
+        Map<String,Object> result=JSON.readValue(Files.readAllBytes(state.resolve("summary.json")),new TypeReference<Map<String,Object>>() {});
         require(Boolean.TRUE.equals(result.get("passed"))&&number(result.get("deviceCount"))==3,"real_simulator_summary_passed");
         for(var device:objects(result.get("devices")))require(number(device.get("duplicates"))>=2&&number(device.get("simulatedOfflineCycles"))==2
                 &&number(device.get("uploadsSubmitted"))==1&&number(device.get("partsUploaded"))==1,"each_device_persisted_replayed_and_uploaded");
@@ -257,7 +258,7 @@ public final class SwarmFlowProbe {
         Map<String,Object> summary=summary();require(number(summary.get("missingRequiredCount"))==1&&number(summary.get("presentRequiredCount"))==2
                 &&((Number)summary.get("averageProgress")).doubleValue()==40.0,"replacement_resets_current_summary_and_excludes_old_material");
         require(((List<?>)summary.get("missingRequiredIds")).contains(old.requirement),"missing_requirement_identifies_replaced_subtask");
-        Map<String,Object> state=JSON.readValue(Files.readAllBytes(reportPath.getParent().resolve("simulator-state").resolve(oldDevice.id+".json")),Map.class);
+        Map<String,Object> state=JSON.readValue(Files.readAllBytes(reportPath.getParent().resolve("simulator-state").resolve(oldDevice.id+".json")),new TypeReference<Map<String,Object>>() {});
         Map<String,Object> accepted=object(object(state.get("lastAck")).get("payload"));
         String beforeSeen=jdbc.queryForObject("SELECT CAST(last_seen_at AS CHAR) FROM drone WHERE id=?",String.class,oldDevice.id);
         long beforeEvents=count("SELECT COUNT(*) FROM device_event WHERE drone_id=?",oldDevice.id);
@@ -401,7 +402,7 @@ public final class SwarmFlowProbe {
         boolean secretResponse=path.equals(API+"/drones")&&method.equals("POST")||path.equals(API+"/auth/login");
         require((secretResponse||secrets.stream().noneMatch(text::contains))&&!text.contains("objectKey")&&!text.contains("object_key")&&!text.contains("upload-parts/")&&!text.contains("evidence-files/")
                 &&!text.contains("transactionBytes")&&!text.contains("commitBytes")&&!text.contains(storageEndpoint),name+"_safe_response");
-        Map<String,Object> envelope=JSON.readValue(response.body(),Map.class);require(envelope.keySet().equals(Set.of("code","message","data","traceId")),name+"_uniform_envelope");
+        Map<String,Object> envelope=JSON.readValue(response.body(),new TypeReference<Map<String,Object>>() {});require(envelope.keySet().equals(Set.of("code","message","data","traceId")),name+"_uniform_envelope");
         require(trace.equals(envelope.get("traceId"))&&trace.equals(response.headers().firstValue("X-Trace-Id").orElse(null)),name+"_trace_propagated");
         return new Reply(response.statusCode(),envelope);
     }

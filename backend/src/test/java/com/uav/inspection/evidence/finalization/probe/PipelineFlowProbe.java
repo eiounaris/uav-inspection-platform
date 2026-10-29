@@ -9,12 +9,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import javax.imageio.ImageIO;
 import javax.sql.DataSource;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.FilterInputStream;
@@ -24,9 +24,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import com.uav.inspection.messaging.OutboxPublisher;
 import com.uav.inspection.evidence.finalization.FinalizationProcessor;
-import org.springframework.amqp.core.Message;
-import org.springframework.amqp.core.MessageProperties;
-import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
@@ -73,6 +70,7 @@ import java.util.zip.CRC32;
 /** Explicit real HTTP/MySQL/Garage/RabbitMQ probe. Never runs as an ordinary unit test. */
 public final class PipelineFlowProbe {
     private static final JsonMapper JSON = JsonMapper.builder().build();
+    private static final TypeReference<Map<String, Object>> JSON_OBJECT_TYPE = new TypeReference<>() {};
     private static final String OWNER = "00000000-0000-4000-8000-000000000001";
     private static final String OPERATOR = "00000000-0000-4000-8000-000000000002";
     private static final String API = "/api/v1";
@@ -225,7 +223,7 @@ public final class PipelineFlowProbe {
         random.nextBytes(entropy);
         String password = Base64.getUrlEncoder().withoutPadding().encodeToString(entropy);
         secrets.add(password);
-        var account = new Account(UUID.randomUUID().toString(), org,
+        var account = new Account(UUID.randomUUID().toString(),
                 "t011-" + runId.substring(0, 12) + "-" + suffix, password);
         accounts.add(account);
         String encoded = new BCryptPasswordEncoder(12).encode(password);
@@ -419,7 +417,7 @@ public final class PipelineFlowProbe {
     private void verifyPendingEvent(String upload) throws Exception {
         Map<String,Object> row=jdbc.queryForMap("SELECT * FROM outbox_event WHERE biz_id=? AND event_type='FILE_FINALIZE_REQUESTED'",upload);
         require("PENDING".equals(row.get("status"))&&number(row.get("dispatch_no"))==0,"completion_outbox_is_pending_dispatch_zero");
-        Map<String,Object> payload=JSON.readValue(string(row.get("payload")),Map.class);
+        Map<String,Object> payload=JSON.readValue(string(row.get("payload")), JSON_OBJECT_TYPE);
         require(payload.keySet().equals(Set.of("eventId","eventType","bizId","traceId"))
                 &&upload.equals(payload.get("bizId"))&&row.get("event_id").equals(payload.get("eventId"))
                 &&"FILE_FINALIZE_REQUESTED".equals(payload.get("eventType")),"outbox_payload_is_minimal_safe_event_envelope");
@@ -430,7 +428,7 @@ public final class PipelineFlowProbe {
             var delivery=channel.basicGet(anchorQueue,false);
             require(delivery!=null,"anchor_message_is_observable_in_real_broker");
             try {
-                Map<String,Object> payload=JSON.readValue(delivery.getBody(),Map.class);
+                Map<String,Object> payload=JSON.readValue(delivery.getBody(), JSON_OBJECT_TYPE);
                 require(payload.keySet().equals(Set.of("eventId","eventType","bizId","traceId"))
                         &&"EVIDENCE_ANCHOR_REQUESTED".equals(payload.get("eventType"))&&version.equals(payload.get("bizId")),
                         "broker_anchor_payload_has_no_file_bytes_keys_or_identity_secrets");
@@ -534,7 +532,6 @@ public final class PipelineFlowProbe {
         report.put("isolatedBrokerTopologyDeleted",true);
     }
 
-
     private String createSession(String name, Account actor, Map<String, Object> body) throws Exception {
         Reply reply = expect(name, "POST", uploadPath(), actor.token, body, 200);
         String id = string(reply.data().get("uploadId"));
@@ -620,24 +617,11 @@ public final class PipelineFlowProbe {
         require(!text.contains("objectKey") && !text.contains("object_key") && !text.contains("upload-parts/")
                         && !text.contains(storageEndpoint) && secrets.stream().noneMatch(text::contains),
                 name + "_response_does_not_expose_private_storage_or_credentials");
-        Map<String, Object> envelope = JSON.readValue(response.body(), Map.class);
+        Map<String, Object> envelope = JSON.readValue(response.body(), JSON_OBJECT_TYPE);
         require(envelope.keySet().equals(Set.of("code", "message", "data", "traceId")), name + "_uniform_envelope");
         require(trace.equals(response.headers().firstValue("X-Trace-Id").orElse(null))
                         && trace.equals(envelope.get("traceId")), name + "_trace_header_and_body");
         return new Reply(response.statusCode(), envelope, trace);
-    }
-
-    private long partCount(String id) {
-        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM upload_part WHERE session_id=?", Long.class, id);
-        require(count != null, "part_count_present");
-        return count;
-    }
-
-    private long actionCount(String action) {
-        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM audit_log WHERE trace_id LIKE ? AND action=?", Long.class,
-                "t011-" + runId + "-%", action);
-        require(count != null, "audit_count_present");
-        return count;
     }
 
     private void successAudit(Reply reply, String action) {
@@ -763,8 +747,13 @@ public final class PipelineFlowProbe {
     }
 
     private static Map<String, Object> object(Object value) {
-        if (!(value instanceof Map<?, ?>)) throw new ProbeFailure("expected_json_object");
-        return (Map<String, Object>) value;
+        if (!(value instanceof Map<?, ?> map)) throw new ProbeFailure("expected_json_object");
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (var entry : map.entrySet()) {
+            if (!(entry.getKey() instanceof String key)) throw new ProbeFailure("expected_json_object");
+            result.put(key, entry.getValue());
+        }
+        return result;
     }
 
     private static List<Map<String, Object>> objects(Object value) {
@@ -779,8 +768,8 @@ public final class PipelineFlowProbe {
     }
 
     private static final class Account {
-        final String id,org,username,password; String token;
-        Account(String id,String org,String username,String password){this.id=id;this.org=org;this.username=username;this.password=password;}
+        final String id,username,password; String token;
+        Account(String id,String username,String password){this.id=id;this.username=username;this.password=password;}
         @Override public String toString(){return "PipelineProbeAccount["+id+"]";}
     }
     private record Scope(String requirementId,String executionId,String subtaskId) {}
@@ -809,11 +798,11 @@ public final class PipelineFlowProbe {
             if(!key.equals(failKey)||!armed.compareAndSet(true,false))return live;
             return new FilterInputStream(live){
                 @Override public int read(byte[] bytes,int offset,int length)throws IOException {
-                    int result=super.read(bytes,offset,length); injected.incrementAndGet();
+                    super.read(bytes,offset,length); injected.incrementAndGet();
                     throw new IOException("Controlled probe stream interruption");
                 }
                 @Override public int read()throws IOException {
-                    int result=super.read(); injected.incrementAndGet();
+                    super.read(); injected.incrementAndGet();
                     throw new IOException("Controlled probe stream interruption");
                 }
             };

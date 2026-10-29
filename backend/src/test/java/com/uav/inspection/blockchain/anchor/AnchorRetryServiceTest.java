@@ -232,7 +232,10 @@ class AnchorRetryServiceTest {
         var permissions=new ResourcePermissionService(identities,authentication,memberships);
         var proxy=new ProxyFactory(new AnchorRetryService(mapper,permissions,outbox,audit));
         proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(transactions,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(transactions);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (AnchorRetryService)proxy.getProxy();
     }
     private static CurrentUser actor(String org,Role role) {

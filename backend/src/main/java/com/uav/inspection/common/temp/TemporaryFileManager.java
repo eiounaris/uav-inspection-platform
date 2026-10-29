@@ -130,6 +130,10 @@ public class TemporaryFileManager implements AutoCloseable {
         return counts.result();
     }
 
+    // opened and secure refer to the same stream. Cursor owns it on success;
+    // releaseCursor closes it after traversal, replacement, eviction or shutdown.
+    // The catch below closes it if construction fails.
+    @SuppressWarnings("resource")
     private static Cursor openCursor(Path parent,Object key) throws IOException {
         DirectoryStream<Path> opened=Files.newDirectoryStream(parent);
         try {

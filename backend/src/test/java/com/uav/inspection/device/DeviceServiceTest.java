@@ -22,7 +22,6 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class DeviceServiceTest {
@@ -105,7 +104,10 @@ class DeviceServiceTest {
     @SuppressWarnings("unchecked")
     private static <T> T proxy(T target,RecordingManager manager) {
         var proxy=new ProxyFactory(target); proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (T)proxy.getProxy();
     }
     public static class ReportPhase extends DeviceTransactions {

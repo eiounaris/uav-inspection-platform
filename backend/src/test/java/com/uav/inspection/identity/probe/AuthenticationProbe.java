@@ -6,6 +6,7 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.server.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import javax.sql.DataSource;
@@ -400,7 +401,7 @@ public final class AuthenticationProbe {
     private Row databaseUser(Fixture fixture) {
         return jdbc.queryForObject("""
                 SELECT CAST(roles AS CHAR) AS roles_json, token_version, lock_version FROM app_user WHERE id=?
-                """, (rs, row) -> new Row(JSON.readValue(rs.getString("roles_json"), List.class),
+                """, (rs, row) -> new Row(JSON.readValue(rs.getString("roles_json"),new TypeReference<List<String>>() {}),
                 rs.getLong("token_version"), rs.getLong("lock_version")), fixture.id());
     }
 
@@ -563,9 +564,8 @@ public final class AuthenticationProbe {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static Map<String, Object> readMap(byte[] body) {
-        return JSON.readValue(body, Map.class);
+        return JSON.readValue(body,new TypeReference<Map<String,Object>>() {});
     }
 
     @SuppressWarnings("unchecked")

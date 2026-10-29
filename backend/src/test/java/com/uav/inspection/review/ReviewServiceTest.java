@@ -336,7 +336,10 @@ class ReviewServiceTest {
         var permissions=new ResourcePermissionService(identities,authentication,memberships);
         var proxy=new ProxyFactory(new ReviewService(mapper,permissions,audit));
         proxy.setProxyTargetClass(true);
-        proxy.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
+        var interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
+        proxy.addAdvice(interceptor);
         return (ReviewService)proxy.getProxy();
     }
     private static CurrentUser actor(String id,String org,Role role) {

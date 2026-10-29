@@ -24,6 +24,7 @@ import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.io.InputStream;
@@ -87,12 +88,11 @@ public final class MvpEvidenceInspector {
     private final Map<String,Object> report=new LinkedHashMap<>();
     private final List<String> checks=new ArrayList<>();
     private final List<String> secrets=new ArrayList<>();
-    private final String phase;
     private final Path output;
     private Connection connection;
 
     private MvpEvidenceInspector(String phase,Path output) {
-        this.phase=phase; this.output=output.toAbsolutePath().normalize();
+        this.output=output.toAbsolutePath().normalize();
         report.put("formatVersion",1); report.put("phase",phase); report.put("passed",false);
         report.put("startedAt",Instant.now().toString()); report.put("checks",checks);
         environment.forEach((key,value)->{
@@ -251,7 +251,7 @@ public final class MvpEvidenceInspector {
     }
 
     private void verifyDemoAccounts() throws Exception {
-        Map<String,Object> credentials=object(JSON.readValue(Files.readAllBytes(credentialsPath()),Map.class));
+        Map<String,Object> credentials=object(JSON.readValue(Files.readAllBytes(credentialsPath()),new TypeReference<Map<String,Object>>() {}));
         Map<String,Object> passwords=object(credentials.get("passwords"));
         Map<String,Object> tokens=object(credentials.get("droneTokens"));
         check(number(credentials,"formatVersion")==1 && passwords.size()==6 && tokens.size()==1,"prepared_demo_credential_structure_valid");
@@ -333,7 +333,7 @@ public final class MvpEvidenceInspector {
             check("SENT".equals(text(row,"status")) &&number(row,"dispatch_no")==0 &&row.get("sent_at")!=null
                     &&row.get("lease_token")==null &&row.get("lease_until")==null &&row.get("last_error")==null,
                     "both_durable_outbox_events_are_confirmed_sent_without_active_lease");
-            Map<String,Object> payload=object(JSON.readValue(text(row,"payload"),Map.class));
+            Map<String,Object> payload=object(JSON.readValue(text(row,"payload"),new TypeReference<Map<String,Object>>() {}));
             check(payload.keySet().equals(Set.of("eventId","eventType","bizId","traceId")) &&id.equals(payload.get("eventId"))
                     &&event[0].equals(payload.get("eventType")) &&event[1].equals(payload.get("bizId"))
                     &&payload.get("traceId") instanceof String trace &&trace.matches("[A-Za-z0-9_-]{1,64}"),"message_envelope_contains_only_safe_business_identifiers");
@@ -521,7 +521,7 @@ public final class MvpEvidenceInspector {
 
     private Map<String,Object> readPreflight(String path) throws Exception {
         check(path!=null && !path.isBlank(),"preflight_report_required");
-        Map<String,Object> baseline=object(JSON.readValue(Files.readAllBytes(Path.of(path)),Map.class));
+        Map<String,Object> baseline=object(JSON.readValue(Files.readAllBytes(Path.of(path)),new TypeReference<Map<String,Object>>() {}));
         check(Boolean.TRUE.equals(baseline.get("passed")) &&"preflight".equals(baseline.get("phase"))
                 &&number(baseline,"formatVersion")==1,"passing_preflight_report_required");
         Snapshot snapshot=JSON.convertValue(baseline.get("snapshot"),Snapshot.class);
