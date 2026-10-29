@@ -16,14 +16,16 @@ import tarfile
 
 from network import (CHANNEL, NETWORK, ORDERER_TLS, ROOT, RUNTIME_ENV, TOOLS, WORK,
                      compose, execute, joined_channels, peer)
+from prepare import check_materials
+from settings import SETTINGS
 
 NAME = "evidence"
 VERSION = "0.1.0"
 SEQUENCE = "1"
 POLICY = "AND('Org1MSP.peer','Org2MSP.peer')"
-IMAGE = "uav-inspection/evidence-chaincode:0.1.0"
+IMAGE = SETTINGS.chaincode_image
 DIRECTORY = WORK / "chaincode"
-ORDERING = ["-o", "localhost:7050", "--ordererTLSHostnameOverride", "orderer.example.com",
+ORDERING = ["-o", SETTINGS.orderer_endpoint, "--ordererTLSHostnameOverride", "orderer.example.com",
             "--tls", "--cafile", str(ORDERER_TLS / "ca.crt")]
 DEFINITION = ["--channelID", CHANNEL, "--name", NAME, "--version", VERSION,
               "--sequence", SEQUENCE, "--signature-policy", POLICY]
@@ -31,10 +33,10 @@ DEFINITION = ["--channelID", CHANNEL, "--name", NAME, "--version", VERSION,
 
 def endorsement_peers():
     arguments = []
-    for org, port in ((1, 7051), (2, 9051)):
+    for org in (1, 2):
         ca = NETWORK / (f"organizations/peerOrganizations/org{org}.example.com/"
                         f"peers/peer0.org{org}.example.com/tls/ca.crt")
-        arguments.extend(["--peerAddresses", f"localhost:{port}", "--tlsRootCertFiles", str(ca)])
+        arguments.extend(["--peerAddresses", SETTINGS.peer_endpoint(org), "--tlsRootCertFiles", str(ca)])
     return arguments
 
 
@@ -148,6 +150,7 @@ def lock_artifacts(jar_hash, dockerfile_hash):
 
 
 def deploy():
+    check_materials()
     jar = ROOT / "chaincode/target/evidence-chaincode-0.1.0.jar"
     if not jar.is_file():
         raise RuntimeError("Build chaincode/pom.xml with Maven clean verify first")

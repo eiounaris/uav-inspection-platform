@@ -1,0 +1,12 @@
+import {el,field,button,format,empty,pageBar,bindSubmit,errorText} from './common.js';
+export function createAuditPanel({api,notify,getSelectedTask}) {
+  const state={page:1,pageSize:20,total:0};const lifetime=new AbortController();let epoch=0;
+  const task=el('input',{required:true,placeholder:'选择任务后自动填写，或输入任务编号',testId:'audit-task'});
+  const action=el('input',{placeholder:'例如 TASK_COMPLETED','aria-label':'操作代码（可选）'}), trace=el('input',{placeholder:'按诊断编号筛选','aria-label':'诊断编号（可选）'});
+  const form=el('form',{className:'form-grid'},field('任务编号',task),field('操作代码',action),field('诊断编号',trace),el('div',{className:'form-actions'},el('button',{type:'submit',className:'button',testId:'audit-load'},'查询记录')));
+  const content=el('div',{className:'card'},empty('选择需要追溯的任务','只显示当前任务中实际关联的业务记录。'));
+  const element=el('section',{className:'panel'},el('div',{className:'page-heading'},el('div',{},el('div',{className:'eyebrow'},'ACTIVITY & TRACE'),el('h1',{},'任务审计'),el('p',{},'追溯任务、成果、复核、共享和核验的操作记录。'))),el('div',{className:'card'},form),content);
+  bindSubmit(form,async()=>{state.page=1;await query();},notify);
+  async function query(){const current=++epoch;const id=task.value.trim();if(!id)return;const params=new URLSearchParams({page:state.page,pageSize:state.pageSize});if(action.value.trim())params.set('action',action.value.trim());if(trace.value.trim())params.set('traceId',trace.value.trim());try{const result=await api.request(`/tasks/${encodeURIComponent(id)}/audit-logs?${params}`,{signal:lifetime.signal});if(current!==epoch)return;state.total=result.total;const body=el('tbody',{},...result.items.map(row=>el('tr',{},el('td',{},format.time(row.createdAt)),el('td',{},row.actionLabel||row.action),el('td',{className:'mono'},row.resourceId),el('td',{},row.actorType==='SYSTEM'?'系统':row.actorType==='DEVICE'?'设备':'用户'),el('td',{className:'mono'},row.traceId),el('td',{},format.status(row.result)))));content.replaceChildren(result.items.length?el('div',{className:'table-wrap'},el('table',{className:'table'},el('thead',{},el('tr',{},...['操作时间','操作','关联编号','发起方','诊断编号','结果'].map(x=>el('th',{},x)))),body)):empty('暂无匹配的操作记录'),pageBar(state,page=>{state.page=page;query();}));}catch(error){if(error.name!=='AbortError'&&current===epoch)content.replaceChildren(el('p',{className:'inline-error'},errorText(error)));}}
+  return{element,load(){if(getSelectedTask()?.id)task.value=getSelectedTask().id;if(task.value)return query();},destroy(){epoch++;lifetime.abort();}};
+}

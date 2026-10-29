@@ -1,39 +1,126 @@
 # 无人机集群巡检数据共享与证据溯源平台
 
-面向园区委托方和无人机运营商，使用 Java 后端管理多机巡检任务、文件上传、版本、人工复核及授权共享，使用 Hyperledger Fabric 登记和查询文件摘要。
+面向园区委托方与无人机运营商，以Java后端管理多机巡检任务、分片上传、固定版本、人工复核、授权共享和摘要核验；Hyperledger Fabric只登记和查询文件摘要，文件与业务元数据保存在链外。
 
-## 当前进度
+**0.1.0 MVP 已于 2026-10-29 完成交付核对，M0～M5、T001～T034 已完成。** AC-01～AC-12、性能实测、隔离部署与普通重启有实际证据；当前为单实例应用、双机构、单通道、两方法链码和3～5台HTTP设备模拟器。版本、产物摘要、验收范围及已知限制见[最终交付说明](docs/delivery.md)，逐项经过见[任务清单](docs/03-tasks.md)和[验证记录](docs/verification.md)。
 
-- 三份首版文档已完成。
-- T001 环境盘点与版本候选清单已完成，详见 [验证记录](docs/verification.md)。
-- 本机 JDK 21、Maven、Docker CLI、Compose 插件及 Docker daemon 已验证可用。
-- T002 工程骨架已完成：20 项契约测试通过，可执行 JAR 已验证 local/prod 启动及 UTC 时间输出。
-- T003 基础设施已完成：MySQL、Redis、RabbitMQ、Garage S3 正在本机运行，读写、消息、私有对象及保留卷重建验证通过。
-- T004 Fabric 开发网络已完成：两个 Peer 和一个 Orderer 健康，均已加入 mychannel；保留卷重建后通道高度、区块哈希和证书一致。
-- T005 Java 链码已完成：50 项测试通过，已部署 evidence 0.1.0，双机构普通用户的登记、查询、幂等、冲突与越权拒绝实测通过。
-- T006 Java Gateway 已完成：后端共 32 项测试通过；四个独立 JVM 完成交易检查点恢复、有效提交、双机构查询及幂等/拒绝用例。
-- **M1 技术验证已通过**。T007 已完成 MySQL/MyBatis/Flyway 接入、五表迁移及 6 个账号/1 台设备初始化；重复启动、24 项真实约束检查和 UTC 毫秒往返通过。
-- T008 认证与角色管理已完成：登录、退出、me、机构内角色修改可用；后端 56 项测试及 48 次真实 HTTP 验收通过，旧令牌失效、越权拒绝和并发 CAS 已验证。
-- T009 任务与成员管理已完成：九项操作覆盖草稿、资料要求、成员、分配、子任务、初始批次和启动；66 项后端测试、90 次真实 HTTP 调用及 35 项数据库约束检查通过。
-- T010 私有上传已完成：会话创建、原始分片上传和进度查询接入真实 Garage；72 项后端测试、68 次真实 HTTP 流程及 49 项数据库约束检查通过，原数据及凭据保留。
-- T011 异步定版与 Outbox 已完成：99 项后端测试、42 次真实 HTTP 联调及 68 项数据库约束通过，已验证唯一版本、消息重复、无法路由重试和临时故障恢复。
-- T012 业务存证已完成：129 项后端测试、45 次真实 HTTP 联调及 87 项数据库约束通过；两个版本真实上链，确认响应丢失后用原交易恢复成功。
-- T013 文件核验已完成：148 项后端测试、62 次真实 HTTP 联调及 110 项数据库约束通过；原文件/副本比较、五种结果、历史权限及处理中撤销成员均已验证。
-- **T014 已完成，M2 最小真实闭环已通过**：打包应用经正式接口自动完成任务、上传、定版、真实存证和核验；33 次 HTTP 验收及 15 次同版本复查通过，演示成果保留。
-- T015 设备管理、独立设备认证及上报已完成：185 项后端测试、79 次真实 HTTP/606 项检查和 129 项数据库约束通过；设备上传、重复事件去重、单调进度及 Redis 故障回源已验证。
-- T016 多机模拟、人工换机和迟到隔离已完成：199 项后端测试、9 项模拟器测试、144 项数据库约束及 84 次真实 HTTP/473 项检查通过；旧批次更大的版本号不会覆盖当前成果。
-- T017 多分片续传与多版本归档已完成：212 项后端测试、20 项 Python 测试、144 项数据库约束和 88 次真实 HTTP/648 项检查通过；两个独立 Java 进程验证续传，旧新版本独立保留，提供通用上传客户端。
-- T018 异常工单与人工复核已完成：版本异常登记/分页、通过/退回与唯一正式结论可用；233 项后端测试、167 项数据库约束和 108 次真实 HTTP/780 项检查通过，新旧版本结论独立于链状态。
-- T019 提交验收与任务完成已完成：262 项后端测试、172 项数据库约束和 132 次真实 HTTP/968 项检查通过；7 个测试版本取得真实 Fabric 有效确认，任务完成条件、并发控制及终态保护均已验证。
-- T020 指定版本共享与受控下载已完成：311 项后端测试、206 项数据库约束和 123 次真实 HTTP/866 项检查通过；共享申请、审批、拒绝、撤销、到期及新旧版本权限隔离已验证，两个版本真实上链。
-- T021 任务审计及业务关系查询已完成：339 项后端测试、206 项数据库约束和 161 次真实 HTTP/1836 项检查通过；审计按真实资源归属分页，版本关联异常、复核、存证、共享与核验摘要，查询不写审计或调用外部服务。
-- T022 Outbox、消费幂等及死信处理已完成：384 项后端测试、220 项数据库约束和双 JVM 故障恢复验证通过；确认后崩溃复用原事件恢复，持久化检查点后才 ACK，坏消息先记录再进入死信。
-- T023 处理续租和业务扫描恢复已完成：425 项后端测试、220 项数据库约束及双 JVM 26 次业务 HTTP/272 项检查通过；真实文件读取超过原 120 秒租约仍可续租，重启后默认扫描恢复三个固定版本及真实存证。
-- T024 Fabric 未知态、失败重试与人工重新检查已完成：458 项后端测试、235 项数据库约束及 77 次真实 HTTP/599 项检查通过；人工申请按任务权限及请求编号幂等处理，原交易与确认请求可继续恢复，永久拒绝不能被强制覆盖。
-- T025 临时文件、分片及孤立对象清理已完成：508 项后端测试、248 项数据库约束及 30 次真实 HTTP/303 项检查通过；保护正式引用与有效租约，支持持久删除重试和跨 JVM 崩溃残留回收。最终 JAR 对原 M2 的 15 次 HTTP/111 项复查通过，无新增链登记。
-- T026 权限、状态与跨模块并发回归已完成：修复跨任务成员更新死锁，513 项测试、248 项数据库约束、8 轮/16 次成员更新及 183 次 HTTP/1322 项检查通过；最终 JAR 原 M2 复查通过，原数据及凭据保持。
-- T027 跨系统故障验收已完成：六个真实 JVM 崩溃窗口经过原租约自然到期后自动恢复，六个版本真实存证确认；原事件/交易、业务数据及凭据保持，最终 JAR 原 M2 复查通过。
-- **M1～M4 已通过**。下一项为 **T028：最小可用管理界面与联调**；M5 和完整 MVP 继续按任务清单完成。
+## 首次部署
+
+以下命令均在项目根目录运行。已验证Linux x86_64、Temurin JDK21.0.12、Maven3.9.16、Python3.10.12、Docker29.7.2及Compose5.4.0。Fabric准备工具固定Linux amd64；其他系统尚未验证。前端是JAR内的同源静态页面，普通运行不需要额外前端服务。
+
+先让当前终端的`JAVA_HOME`指向已安装的JDK21，并把`$JAVA_HOME/bin`放到PATH前面。系统默认JDK可能不是21，`.env`不会切换Java。确认工具后生成一次性本地凭据：
+
+```bash
+java -version
+mvn -version
+docker compose version
+python3 deploy/scripts/init-env.py
+python3 deploy/scripts/init-demo-credentials.py
+```
+
+两个初始化脚本保留已有文件。`.env`及`.local/demo-credentials.json`均为0600，内含随机秘密，禁止提交。配置按字面读取，不要通过`source .env`执行。修改配置文件中的密码不会修改已有卷内账号。
+
+构建应用、链码并启动基础设施：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -Pdatabase-probe,fabric-probe clean verify
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f chaincode/pom.xml clean verify
+docker compose --env-file .env -f deploy/compose.yml config --quiet
+docker compose --env-file .env -f deploy/compose.yml up -d --wait --wait-timeout 240
+```
+
+首次构建需要取得Maven依赖和固定摘要镜像。离线缓存已经准备好时，可给Maven加`-o`；没有缓存不能把离线命令当作联网安装替代。`config --quiet`只校验配置，不输出展开后的秘密。
+
+首次准备新的Fabric身份、通道和链码，再启动应用：
+
+```bash
+python3 deploy/fabric/prepare.py
+python3 deploy/fabric/network.py up
+python3 deploy/fabric/network.py channel
+python3 deploy/fabric/chaincode.py deploy
+python3 deploy/fabric/network.py verify
+python3 deploy/scripts/run-backend.py --demo --ledger
+```
+
+`prepare.py`只在全新目录生成身份，已有材料必须与固定版本和指纹一致；`channel`与`deploy`复用已有相同通道/定义并拒绝静默升级。首个应用启动自动执行Flyway V1～V14，`--demo`只在local/database允许，用于初始化6账号和1设备；等待日志出现`Demo data ready`。演示初始化不创建业务任务，不伪造完成或存证状态。
+
+打开 `http://127.0.0.1:8080/`。用户名是owner-admin、owner-reviewer、owner-approver、operator-admin、operator-user、operator-outsider；各自随机密码只在本机`.local/demo-credentials.json`中。页面不会预填密码。另需端口时使用进程变量，例如 `SERVER_PORT=8081 python3 deploy/scripts/run-backend.py --ledger`；启动器不读取`.env`里的SERVER_PORT。
+
+## 日常启动、停止与数据保留
+
+初次初始化完成后，通常启动：
+
+```bash
+docker compose --env-file .env -f deploy/compose.yml up -d --wait --wait-timeout 240
+python3 deploy/fabric/network.py up
+python3 deploy/scripts/run-backend.py --ledger
+```
+
+普通启动不需要重新生成凭据、身份或账本，也不需要再次部署链码。应用前台运行，Ctrl+C停止；随后可停止依赖并保留卷：
+
+```bash
+python3 deploy/fabric/network.py stop
+docker compose --env-file .env -f deploy/compose.yml stop
+```
+
+再次执行日常启动即可继续原数据。不要在日常操作中删除卷、移除`.local/fabric`或重建`.env`。业务库使用Flyway迁移，不能修改已应用的旧迁移。
+
+## 真实演示与模拟器
+
+停止前台后端后，自动演示工具会独占启动自己的随机端口应用，使用正常消息处理和真实Fabric，不应与另一个项目后端或探针同时运行：
+
+```bash
+python3 deploy/scripts/deployment_demo.py
+```
+
+它启动真实三设备模拟器，再完成四设备/三子任务、人工换机、旧新版本上传/复核、精确共享、核验和任务完成。成功结果保留在数据库、S3和账本；本轮地址、版本、交易、检查记录位于`.local/full-demo/<runId>/`，最新指针为`.local/full-demo/latest.json`。复查同一批成果：
+
+```bash
+python3 deploy/scripts/run-demo.py --recheck .local/full-demo/<runId>
+```
+
+将`<runId>`替换为实际目录。复查只读取已有业务、对象与账本，认证审计追加；不会再次上传或上链。单独模拟器的私有配置及续传方式见[模拟器说明](simulator/README.md)，完整保留演示见[T029说明](docs/t029-demo.md)。
+
+## 项目讲解与面试准备（T033）
+
+[演示讲稿](docs/demo.md)按业务流程、架构、约10分钟讲解顺序和两个真实异常案例组织；[面试材料](docs/interview.md)提供30秒/2分钟介绍、简历要点及十个关联源码的追问。重点是Java任务/批次、可靠上传、资源权限和恢复编排，Fabric保持两方法摘要登记的定位。
+
+异常案例分别解释“发布确认后、SENT前崩溃”与“链交易结果不明时恢复原交易”，使用既有T030证据；完整演示引用T032真实三设备/四版本记录，指标引用T031对应负载，未为整理材料重新生成业务或压测。
+
+## 隔离部署复现（T032）
+
+已有当前产物的T030成功报告、保留演示及固定缓存，且无其他项目后端/探针运行时，可执行以下命令，验证从干净业务状态开始的完整部署与普通重启；该入口在同机新建隔离环境，不重置现有成果：
+
+```bash
+python3 deploy/scripts/verify-deployment.py
+```
+
+工具复制源码，排除原`.env`、凭据、targets、身份及账本；只复用已校验的Maven/归档/镜像缓存。新项目使用随机宿主端口、独立卷、新证书及独立链码镜像标签，完成后保留为停止状态。报告位于`.local/deployment-repro/<runId>/`，复现边界、恢复命令及实际结果见[部署复现记录](docs/deployment.md)。
+
+## 地址与配置
+
+| 服务 | 默认宿主地址 |
+| --- | --- |
+| 工作台/后端 | http://127.0.0.1:8080 |
+| MySQL / Redis | 127.0.0.1:3306 / 127.0.0.1:6379 |
+| RabbitMQ AMQP / 管理 | 127.0.0.1:5672 / http://127.0.0.1:15672 |
+| S3 API | http://127.0.0.1:9000 |
+| Fabric OrgA / OrgB Gateway | localhost:7051 / localhost:9051 |
+
+所有宿主监听仅绑定loopback，CaaS9999只在各自项目网络内提供本地开发明文连接。S3实现是Garage2.4.1，桶为私有，签名必须使用浏览器实际可达的地址。配置项见[.env.example](.env.example)，业务基础设施与Fabric细节分别见[deploy/README.md](deploy/README.md)、[Fabric说明](deploy/fabric/README.md)。
+
+同机多套环境必须同时隔离源码根、Compose项目名、宿主端口、卷、身份和链码镜像。只改端口或cwd不能隔离所有脚本；不要在已有材料上更改namespace。修改Fabric Peer宿主端口时，两个GATEWAY_ENDPOINT也须同步。完整规则见[部署复现记录](docs/deployment.md)。
+
+## 验证与性能
+
+完整矩阵需要已有M2及完整演示成果。上述`deployment_demo.py`创建完整演示；全新环境还应先执行一次`python3 deploy/scripts/verify-mvp.py`创建保留的M2成果，已有成果不必重建。T030另需按[后端浏览器说明](backend/README.md#最小管理界面与浏览器联调t028)准备Node、Playwright和Chromium；普通部署不需要这些依赖。准备好并停止其他应用后执行：
+
+```bash
+python3 deploy/scripts/verify-final.py
+python3 deploy/scripts/run-performance.py
+```
+
+两者都要求当前环境独占，执行真实业务并实际追加链登记。T030入口新执行17组件并逐项验证12个AC，不能用历史PASS替代；改动生产代码后应重建并开启新验收矩阵。[性能记录](docs/performance.md)来自已验收产物：30,343次查询、1,756次正式上报和11次正式上传全成功，查询P95为8.78～26.88ms，五机上报P95为66.49ms。202接收、定版、确认观测和DB检查点分别统计；短时同机结果不代表生产TPS/SLA。
 
 ## 项目文档
 
@@ -42,9 +129,11 @@
 | [需求说明](docs/01-requirements.md) | 功能范围、权限及 12 项验收场景 |
 | [技术设计](docs/02-design.md) | 模块、数据、接口、状态及异常恢复 |
 | [开发任务](docs/03-tasks.md) | 阶段、依赖及完成条件 |
-| [验证记录](docs/verification.md) | 实际环境、固定候选版本、执行证据及待验证事项 |
-| [配置样例](.env.example) | 本地环境参数约定，后续由应用和部署配置接入 |
+| [最终交付](docs/delivery.md) | 0.1.0 MVP 版本、完成日期、产物绑定与已知限制 |
+| [验证记录](docs/verification.md) | 实际环境、固定版本、执行证据及历史修正 |
+| [配置样例](.env.example) | 当前应用和部署脚本的本地配置约定 |
 | [后端说明](backend/README.md) | 构建、运行、包结构和 HTTP 基础约定 |
+| [管理界面说明](backend/README.md#最小管理界面与浏览器联调t028) | 同源工作台、分片续传、身份边界及浏览器验证命令 |
 | [T002 HTTP 示例](examples/t002.http) | 状态接口、请求标识及 404/405 调用 |
 | [T008 HTTP 示例](examples/t008.http) | 登录、当前身份、角色修改、退出及令牌失效 |
 | [T009 HTTP 示例](examples/t009.http) | 双机构创建/分配任务、维护成员、细化资料、分配设备及启动 |
@@ -66,6 +155,14 @@
 | [T025 HTTP 示例](examples/t025.http) | 清理验证入口，以及上传状态与任务审计的观察方法 |
 | [T026 HTTP 示例](examples/t026.http) | 权限、分页及跨模块并发回归入口和观察方法 |
 | [T027 HTTP 示例](examples/t027.http) | 跨 JVM 故障矩阵、恢复入口和原交易观察方法 |
+| [T030 最终功能验收](docs/t030-acceptance.md) | 17 个新组件、12 项 AC、原数据护栏及同构建恢复方法 |
+| [T031 性能与资源实测](docs/performance.md) | 查询/多机/上传原始负载、真实确认耗时、CPU/RSS及测量限制 |
+| [T032 部署复现](docs/deployment.md) | 干净源码/数据隔离、真实模拟器、整套重启与原成果保护 |
+| [T033 演示讲稿](docs/demo.md) | 业务/架构、完整演示、两类异常恢复及指标讲法 |
+| [T033 面试材料](docs/interview.md) | 项目介绍、简历要点、源码追问及实现/依赖能力边界 |
+| [T029 全量接口目录](examples/README.md) | 48 项实际接口、身份/变量及样例对应关系 |
+| [T029 完整演示](docs/t029-demo.md) | 四设备/三子任务、换机、旧新版本、共享、核验及保留复查 |
+| [T028 界面与验证示例](examples/t028.http) | 同源工作台、续传边界、浏览器联调入口及静态/API 权限检查 |
 | [多机模拟器](simulator/README.md) | 3～5 台设备并行、断网重试、持久请求及上传阶段恢复 |
 | [通用续传客户端](simulator/upload.py) | 用户/设备文件上传、私有检查点、查询服务端缺片后继续上传 |
 | [M2 演示说明](docs/m2-demo.md) | 自动验收、保留结果复查和面试演示步骤 |
@@ -73,156 +170,7 @@
 | [Fabric 网络说明](deploy/fabric/README.md) | 固定版本、通道创建、证书及保留账本的启停 |
 | [Java 链码说明](chaincode/README.md) | 两个合约接口、参数、权限、幂等及 CaaS 部署 |
 
-## 本机 Java 选择
 
-本次检测中，系统默认 Java 为 25.0.4，项目目标 JDK 21.0.12 也已安装。开发本项目时，在当前终端选择 JDK 21，并再次确认 Maven 使用同一 JDK：
+## 能力边界
 
-```bash
-export JAVA_HOME="$HOME/.sdkman/candidates/java/21.0.12-tem"
-export PATH="$JAVA_HOME/bin:$PATH"
-java -version
-javac -version
-mvn -version
-```
-
-这里的路径来自本机检查；其他机器应替换为实际 JDK 21 路径。当前核查仅对检查进程选择 JDK 21，没有修改 SDKMAN 的全局默认设置。
-
-## 构建与启动后端
-
-在项目根目录、已选择 JDK 21 的终端执行：
-
-```bash
-mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml clean verify
-java -jar backend/target/inspection-backend-0.1.0.jar
-```
-
-默认监听 `127.0.0.1:8080`，使用 Ctrl+C 停止。另开终端验证：
-
-```bash
-curl -i -H 'X-Trace-Id: demo-001' http://127.0.0.1:8080/api/v1/system/status
-```
-
-状态接口返回应用 `RUNNING`、UTC 时间和请求标识。上述命令启动独立 HTTP 基础模式；认证及任务接口使用下文的数据库模式。环境覆盖及包边界详见 [后端说明](backend/README.md)。
-
-## 环境参数
-
-本地业务服务由 Compose 显式读取 `.env`。使用初始化脚本创建参数及随机凭证，已有文件会保留；Fabric 开发身份路径由准备脚本生成，Java 探针直接使用 gateway-paths.json。`.env` 已加入忽略规则。
-
-```bash
-python3 deploy/scripts/init-env.py
-```
-
-Spring Boot 从进程环境读取 `SPRING_PROFILES_ACTIVE`、`SERVER_ADDRESS`、`SERVER_PORT`，默认 `local`、`127.0.0.1`、`8080`。它不会自动加载 `.env`，初始化脚本也不会启动服务或切换 JAVA_HOME。后端启动器显式读取 DB_*、S3_*、UPLOAD_*、VERIFICATION_*、CLEANUP_*、RABBITMQ_*、MESSAGING_*、FABRIC_*、REDIS_*、DEVICE_*、JWT_SECRET；保留初始化生成的原凭据和 64 位小写十六进制密钥。对象存储在 T010 接入，T011 接入异步定版及消息，T012 通过 --ledger 显式启用真实业务存证，T015 接入设备认证与 Redis 在线状态缓存。
-
-后端固定 Spring Boot 4.1.1，已完成构建、测试及打包启动验证；四个业务服务镜像已通过 T003 验证，Fabric 2.5.16 节点、CLI 和开发通道已通过 T004 验证。Gateway Java 1.13.0 已通过 T006；MyBatis Starter 4.0.0、Flyway 12.4.0 和 Connector/J 9.7.0 已通过 T007，具体状态见验证记录。
-
-## 启动数据库、存储与异步处理后端
-
-MySQL、Garage、RabbitMQ 已启动且已选择 JDK 21 时，在项目根目录执行：
-
-```bash
-python3 deploy/scripts/init-demo-credentials.py
-mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
-python3 deploy/scripts/verify-database.py
-python3 deploy/scripts/verify-auth.py
-python3 deploy/scripts/verify-tasks.py
-python3 deploy/scripts/verify-upload.py
-python3 deploy/scripts/verify-pipeline.py
-python3 deploy/scripts/verify-devices.py
-python3 deploy/scripts/run-backend.py --demo
-```
-
-启动器读取本地 .env 的数据库、存储及 RabbitMQ 参数，开启 local,database,storage,messaging[,demo]。移除 --demo 只迁移结构、不插入演示账号。随机密码和设备令牌保存在 .local/demo-credentials.json（0600），不打印或提交；重复启动保留既有值。prod 组合由应用拒绝演示初始化。迁移、角色清单和验证方法见 [后端说明](backend/README.md)。
-
-T025 清理能力通过 `python3 deploy/scripts/run-backend.py --cleanup` 显式追加 `cleanup` profile；local、prod 的普通启动均不自动启用。默认保留 3600 秒宽限，每轮每类对象最多扫描 100 条、每 60 秒触发一次；配置项为 `CLEANUP_GRACE_SECONDS`、`CLEANUP_BATCH_SIZE`、`CLEANUP_SCAN_DELAY_MS`、`CLEANUP_SCHEDULER_ENABLED`。清理会重查正式文件和分片引用，保护仍可上传的会话及有效处理租约；临时文件使用跨 JVM 文件锁，重启后可回收超龄且无持有者的残留文件。配置与处理边界见 [后端说明](backend/README.md#临时文件分片及孤立对象清理t025)。
-
-独立清理探针入口为 `python3 deploy/scripts/verify-cleanup.py`，需先构建 `database-probe` 并停止其他项目后端和消息消费者。它使用真实 MySQL、Garage 和 RabbitMQ 及独占夹具，不启用 `ledger`，不新增 Fabric 登记；私有报告位于 `.local/cleanup-probe/`。实际验收结果以 [验证记录](docs/verification.md) 为准。
-
-## 启用真实 Fabric 业务存证与文件核验
-
-启动下文 Fabric 网络及链码后，复用原数据库、RabbitMQ、Garage 和普通 User1 身份：
-
-```bash
-python3 deploy/scripts/verify-anchor.py
-python3 deploy/scripts/verify-verifications.py
-python3 deploy/scripts/run-backend.py --demo --ledger
-```
-
---ledger 追加 ledger profile，连接两个机构客户端并启动上链消费者及恢复扫描。local 为缺少的身份路径读取原 .local/fabric/gateway-paths.json；prod 必须配置明确的身份路径。省略 --ledger 可继续运行上传及消息模式。存证详情和状态查询见 [T012 示例](examples/t012.http)，只有有效账本结果才显示 CONFIRMED；超时保留 UNKNOWN 及原交易检查点。
-
-文件核验及历史查询见 [T013 示例](examples/t013.http)，STORED 实际读取原对象，COPY 比较本次副本且不覆盖原文件。核验并发、文件上限及处理时限可由 VERIFICATION_* 配置。
-
-指定版本共享与受控下载见 [T020 示例](examples/t020.http)。共享只开放获批版本，批准要求复核通过且存证确认；下载地址最长 300 秒且不超过授权期限。使用 `python3 deploy/scripts/verify-sharing.py` 可验证真实审批、下载、到期与撤销边界。
-
-真实探针使用独立业务数据和消息拓扑，结束后清理自己的链外夹具；已提交的测试证据保留在原账本，不重建或清空链网络。
-
-消息可靠性验证使用 `python3 deploy/scripts/verify-messaging.py`。脚本在真实发布确认后、SENT 落库前结束第一 JVM，由第二 JVM 等待默认 120 秒发送租约自然到期后恢复，并检查重复消费、ACK 时机和死信。需先停止其他后端或业务探针；运行约 3～4 分钟，私有报告保存在 `.local/messaging-probe/`。复现步骤及边界见 [后端说明](backend/README.md)。
-
-处理租约及恢复扫描验证使用 `python3 deploy/scripts/verify-recovery.py`，沿用默认 120 秒业务租约、30 秒续租及 10 秒扫描间隔。它实际等待长文件读取超过原租约、旧租约自然到期，再用第二 JVM 的自动扫描恢复未完成业务及原 Fabric 交易。运行约 4～5 分钟，使用独占测试夹具，私有报告保存在 `.local/recovery-probe/`。
-
-Fabric 未知态与人工重新检查验证使用 `python3 deploy/scripts/verify-anchor-retries.py`。它通过正式接口检查任务权限、并发幂等及重新检查申请，调用业务处理器核对原确认请求或原交易恢复，并验证永久权限拒绝和真实账本摘要冲突。探针关闭自己的消息消费者及恢复定时入口，以控制故障边界；使用真实服务和独占夹具，报告保存在 `.local/anchor-retry-probe/`。
-
-## 最小真实闭环演示
-
-依赖服务及链码已运行、已按上文构建带 database-probe 的后端时，先停止其他后端实例，再执行：
-
-```bash
-python3 deploy/scripts/verify-mvp.py
-```
-
-脚本使用现有演示账号，经正式 HTTP 接口创建并启动任务、单片上传图片，等待自动定版与真实存证，再核验原文件和副本。成功数据会保留；只读检查器核对数据库、私有对象和两个机构的实际账本。结果位于 `.local/mvp-demo/<run>/`，复查同一版本使用 `python3 deploy/scripts/verify-mvp.py --recheck .local/mvp-demo/<run>`。完整步骤见 [M2 演示说明](docs/m2-demo.md)。
-
-## 启动业务基础设施
-
-```bash
-python3 deploy/scripts/init-env.py
-docker compose --env-file .env -f deploy/compose.yml up -d --wait --wait-timeout 240
-```
-
-四个镜像均已固定版本和摘要。MySQL、Redis、RabbitMQ 的宿主端口分别为 3306、6379、5672，RabbitMQ 管理界面为 `http://127.0.0.1:15672`，S3 API 为 `http://127.0.0.1:9000`。凭证保存在本机 `.env`；所有宿主端口仅绑定 `127.0.0.1`。
-
-MinIO 历史候选镜像获取失败，S3 实现改为 Garage 2.4.1。首次拉取、容器内地址、分阶段持久性验证及保留数据的停止方式见 [基础设施说明](deploy/README.md)。
-
-## 启动 Fabric 网络
-
-```bash
-python3 deploy/fabric/prepare.py
-python3 deploy/fabric/network.py up
-python3 deploy/fabric/network.py channel
-python3 deploy/fabric/network.py verify
-```
-
-工具与样例归档均校验 SHA-256，生成材料放在 `.local/fabric/`。日常可用 `network.py stop` 停止、`network.py up` 恢复，保留证书与账本。OrgA/OrgB 的 Peer 端点分别为 `localhost:7051`、`localhost:9051`。具体版本、私钥路径参考文件及重建验证方法见 [Fabric 网络说明](deploy/fabric/README.md)。
-
-## 构建与部署 Java 链码
-
-在选择 JDK 21、网络及通道已启动的情况下执行：
-
-```bash
-mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f chaincode/pom.xml clean verify
-python3 deploy/fabric/chaincode.py deploy
-python3 deploy/fabric/verify-chaincode.py
-```
-
-链码固定 Java shim 2.5.11，使用独立 CaaS 实例及双组织背书，无需在 Peer 挂载 Docker socket。部署后 `network.py` 自动统一管理三个节点与两个链码实例。链码服务的 9999 端口仅在本项目 Docker 网络内提供明文连接，不发布到宿主机，适用于本地开发验证。
-
-脚本复用已有通道及定义，校验构建产物摘要以防止原版本下静默替换。T005 合约报告及实际交易编号位于 `.local/fabric/chaincode/`，结论见 [验证记录](docs/verification.md)。
-
-## Java 双机构 Gateway 探针
-
-选择 JDK 21，在上述网络和链码已启动的情况下执行：
-
-```bash
-mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P fabric-probe clean verify
-python3 deploy/fabric/verify-gateway.py
-```
-
-构建不会自动向链提交交易。Python 启动器使用两机构 User1 身份，在四个独立 JVM 中验证背书后保存交易、恢复原 txId 提交、恢复确认请求、双方查询及幂等/拒绝场景。检查点和报告保存在 `.local/fabric/gateway-probe/`，latest.json 指向最近成功运行。
-
-默认 Web 应用可独立启动，不读取证书或连接 Fabric。T006 完成的是 SDK 及文件检查点验证，基础 Outbox 已在 T011 接入；T012 接入数据库交易尝试和基础 UNKNOWN 恢复，完整故障矩阵由 M4 验收。参数、分阶段命令及失败处理见 [后端说明](backend/README.md)。
-
-## 开发与演示边界
-
-首版使用两个业务组织、一个通道、一份链码，链上仅有 RegisterEvidence 和 QueryEvidence。图片、视频、报告及权限、复核记录均在链外管理。
-
-无人机采用 3～5 台模拟器，不开发真实飞控、路径规划或自动缺陷识别。摘要核验用于检查文件与登记版本的一致性，不证明现场采集内容真实。
+无人机是HTTP模拟器，不包含真实飞控、路径规划或自动缺陷识别。摘要核验只能证明文件与登记版本一致，不证明现场内容真实；机构应用身份代表其机构，链外成员/复核/授权元数据并未逐项上链。单Orderer、开发证书和本地CaaS连接用于开发演示，生产高可用、证书轮换和公网部署不在本轮验证范围。

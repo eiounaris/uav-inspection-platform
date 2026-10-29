@@ -12,6 +12,7 @@ import uuid
 
 from chaincode import DIRECTORY, NAME, ORDERING, committed, endorsement_peers
 from network import CHANNEL, channel_info, decode_block, peer
+from prepare import check_materials
 
 
 def require(condition, message):
@@ -79,6 +80,7 @@ def rejected(org, evidence_id, version, file_hash, code):
 
 
 def main():
+    check_materials()
     require(all(committed(org) for org in (1, 2)), "Deploy the chaincode first")
     DIRECTORY.mkdir(parents=True, exist_ok=True)
     evidence_id, denied_id = str(uuid.uuid4()), str(uuid.uuid4())

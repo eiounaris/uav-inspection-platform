@@ -32,6 +32,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.authentication.AuthenticationEntryPointFailureHandler;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
@@ -73,6 +74,7 @@ public class SecurityConfiguration {
         stateless(http);
         http.authorizeHttpRequests(authorize -> authorize
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/", "/index.html", "/ui/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/system/status").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
                         .anyRequest().authenticated())
@@ -121,7 +123,15 @@ public class SecurityConfiguration {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
                 .requestCache(AbstractHttpConfigurer::disable)
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .headers(headers -> headers
+                        .contentSecurityPolicy(policy -> policy.policyDirectives(
+                                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                                        + "img-src 'self' blob: data:; connect-src 'self'; "
+                                        + "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"))
+                        .frameOptions(frame -> frame.deny())
+                        .referrerPolicy(policy -> policy.policy(
+                                ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER)));
     }
 
     private static void writeError(HttpServletResponse response, JsonMapper json, ErrorCode error)

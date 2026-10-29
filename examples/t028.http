@@ -1,0 +1,32 @@
+# T028：同源管理工作台与浏览器验证入口。
+# 使用 JDK 21，在仓库根目录构建并启动：
+#   mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+#   python3 deploy/scripts/run-backend.py --ledger
+# 浏览器打开 http://127.0.0.1:8080/，用现有账号登录。
+# 页面没有单独的 Node 构建或开发服务器。JWT 只在页面内存，刷新后需重新登录；
+# 同账号、同来源、同标签页的续传元数据可保留，重新选择原文件后补传服务器缺片。
+# 现代浏览器须支持 Web Crypto；HTTP 开发使用 localhost/127.0.0.1，其他部署使用 HTTPS。
+# 本地协议检查：
+#   node frontend-tests/api.test.mjs
+#   node frontend-tests/upload.test.mjs
+# 可选真实浏览器依赖安装见 backend/README.md，然后停止普通后端和消费者并执行：
+#   python3 deploy/scripts/verify-ui.py
+# 脚本使用独占随机账号和消息拓扑，业务操作由页面发起；收尾只删除自己的链外夹具。
+# 真实链登记和安全审计追加保留；报告和无凭据截图位于 .local/ui-probe/<runId>/。
+
+@origin = http://127.0.0.1:8080
+
+### 匿名读取界面入口：200 HTML；脚本、样式均为同源外部资源。
+GET {{origin}}/
+
+### 匿名读取模块：200 JavaScript，并带 CSP、nosniff、DENY、no-referrer。
+GET {{origin}}/ui/app.js
+
+### 不存在的静态资源：404 RESOURCE_NOT_FOUND，不返回管理页。
+GET {{origin}}/ui/missing-resource.js
+
+### 公开页面不开放业务 API：无 Bearer 时仍为 401 UNAUTHORIZED。
+GET {{origin}}/api/v1/users/me
+
+### 静态资源仅开放 GET：匿名 POST 仍为 401。
+POST {{origin}}/ui/app.js

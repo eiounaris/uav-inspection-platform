@@ -130,8 +130,15 @@ public final class AcceptanceFlowProbe {
         review(first.id,"RETURNED","初版缺少关键点位，请补充巡检图片");require("RUNNING".equals(task().get("status")),"return_of_latest_current_version_reopens_waiting_task");clients.operator.release();awaitConfirmed(first.id);
 
         byte[] secondBytes=png(0xd34822);clients.operator.arm(requiredEvidenceId,2);Fixed second=upload(requiredId,currentExecution,secondBytes);require(clients.operator.awaitEntered(),"second_real_registration_paused_before_endorsement");
+        var returnedBefore=expect("returned_initial_review_before_correction","GET",API+"/evidence-versions/"+first.id+"/review",reviewer(),null,200).data();
+        var correctedPending=expect("corrected_version_requires_its_own_review","GET",API+"/evidence-versions/"+second.id+"/review",reviewer(),null,200).data();
+        require("RETURNED".equals(returnedBefore.get("reviewStatus"))&&"PENDING".equals(correctedPending.get("reviewStatus"))&&correctedPending.get("review")==null,"correction_does_not_inherit_returned_review");
         submit();review(second.id,"APPROVED",null);require("PENDING".equals(anchor(second.id)),"approved_version_can_still_have_pending_anchor");
         expect("pending_chain_alone_blocks_completion","POST",completePath(),owner(),lock(task()),409);clients.operator.release();awaitConfirmed(second.id);
+        var returnedAfter=expect("returned_initial_review_after_correction","GET",API+"/evidence-versions/"+first.id+"/review",reviewer(),null,200).data();
+        var approvedAfter=expect("corrected_approved_review_after_confirmation","GET",API+"/evidence-versions/"+second.id+"/review",reviewer(),null,200).data();
+        require(returnedBefore.equals(returnedAfter)&&"APPROVED".equals(approvedAfter.get("reviewStatus"))&&first.id.equals(returnedAfter.get("versionId"))&&second.id.equals(approvedAfter.get("versionId")),"returned_and_corrected_review_history_preserved_with_real_confirmations");
+        report.put("returnedAndCorrectedReviewHistoryVerified",true);
         byte[] optionalBytes=png(0x3b8636);String optional=createUpload(optionalId,currentExecution,optionalBytes);putPart(optional,optionalBytes);armStorage(optional);completeUpload(optional);
         require(storageGate.awaitEntered(),"current_optional_file_is_verifying_in_real_s3_read");require("VERIFYING".equals(uploadStatus(optional)),"current_optional_session_is_durably_verifying");
         expect("current_optional_verifying_blocks_completion","POST",completePath(),owner(),lock(task()),409);storageGate.release();Fixed optionalVersion=awaitFixed(optional,optionalBytes);awaitConfirmed(optionalVersion.id);

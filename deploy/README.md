@@ -1,6 +1,6 @@
 # 本地业务基础设施
 
-T003 使用一个 Compose 项目运行 MySQL、Redis、RabbitMQ 和 Garage S3。后端在宿主机独立启动，当前已接入 MySQL、Garage 和 RabbitMQ；Redis 设备缓存随后续任务接入。
+开发环境使用一个Compose项目运行MySQL、Redis、RabbitMQ和Garage S3。后端在宿主机独立启动，四项均已接入；Redis用于可回源的设备presence缓存。完整首次部署见[根README](../README.md#首次部署)，T032实际冷业务状态及重启证据见[部署复现](../docs/deployment.md)。
 
 T004 的双机构链网络使用独立 Compose 项目，T005 的两个 Java CaaS 实例也由该项目统一管理；构建部署、验证及保留账本的启停操作见 [Fabric 网络说明](fabric/README.md)。
 
@@ -85,3 +85,12 @@ docker compose --env-file .env -f deploy/compose.yml up -d --wait --wait-timeout
 ```
 
 `down` 保留命名卷；不要在日常启动时使用删除卷的选项。MySQL 业务表迁移从 T007 开始。验证脚本使用 `infra_probe_<runId>` 独立表，成功检查后仅删除本次表，保持业务库可用于后续 Flyway 首次迁移；不要使用 `--keep` 在准备迁移的空库保留探针表。
+
+
+## 独立环境与T032复现
+
+Compose项目由`.env`中的`INFRA_COMPOSE_PROJECT_NAME`指定，默认uav-inspection；现有.env没有此项时保持原默认。项目名决定命名卷及网络，请在首次建卷前确定并保持。需要并行第二套环境时，使用真正独立源码根、新.env、新项目及五个不同宿主端口；同时改S3_ENDPOINT/PUBLIC_ENDPOINT。单纯换cwd不会改变脚本ROOT。
+
+verify-infra显式使用该.env的项目名，拒绝继承COMPOSE_PROJECT_NAME把exec指向其他项目；探针状态绑定项目，旧无project_name状态只兼容原默认项目。不要拿另一项目的state继续seed/check。
+
+`python3 deploy/scripts/verify-deployment.py`自动在私有新目录完成隔离复现，依赖原环境及固定离线缓存。实测两轮infra seed→stop/up→check通过：先在空库、再在有业务成果的库中，确认MySQL、Redis AOF、Rabbit持久消息及S3对象保留，只清理自己的探针。普通业务重启不需要创建探针，也不使用删除卷选项。新复现环境最终停止并保留，原环境始终运行。

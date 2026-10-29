@@ -1,4 +1,4 @@
-name: uav-inspection
+name: ${INFRA_COMPOSE_PROJECT_NAME:-uav-inspection}
 
 services:
   mysql:

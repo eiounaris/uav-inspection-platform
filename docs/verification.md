@@ -2255,3 +2255,477 @@ python3 deploy/scripts/verify-mvp.py --recheck .local/mvp-demo/20261023T074934Z-
 ```
 
 观察及分组件恢复/收尾方法见 [t027.http](../examples/t027.http) 和 [后端说明](../backend/README.md#跨系统故障注入与恢复验收t027)。T027 及 M4 已完成，下一项 T028 提供最小可用管理界面并联调。M5、12 项最终验收、压测和完整交付尚未完成。
+
+
+## T028：最小管理界面与真实浏览器联调
+
+| 项目 | 实际结果 |
+| --- | --- |
+| 日期与范围 | 2026-10-27；同源静态管理界面、浏览器续传及既有业务联调 |
+| 界面产物 | backend/src/main/resources/static/，HTML/CSS/原生 ES modules，随同一 Spring Boot JAR 交付 |
+| 自动化产物 | UiSecurityContractTest、frontend-tests/、UiBrowserFixture、deploy/scripts/verify-ui.py、examples/t028.http |
+| 后端与协议 | 最终 JDK 21 Maven verify：517 项，失败/错误/跳过均为 0；Node API 15 项、上传 16 项通过 |
+| 浏览器 | 最终 Chromium 141.0.7390.37：204 项检查通过，206 次 API 响应/只读负例请求记录；桌面 1440px、移动 390px 截图已人工检查 |
+| 最终报告 | `.local/ui-probe/20261027T122033Z-523ca10b/verify.json`，PASS；具体业务与外部证据见 browser.json、browser-inspection.json、cleanup.json |
+
+### 1. 界面、身份与处理状态
+
+界面覆盖登录/退出、任务和本机构成员维护、子任务与设备分配、人工换机/执行历史、真实多机进度、分片上传、固定版本与存证状态、异常/复核、精确共享申请/审批/撤销、下载、原文件/副本核验及任务审计。页面使用现有 `/api/v1`，没有新增业务接口、迁移或前端构建依赖，不另起 Web 开发服务器。启动 `python3 deploy/scripts/run-backend.py --ledger` 后访问 `http://127.0.0.1:8080/`；首次环境准备仍按 README，不重建原凭据。
+
+JWT 只在当前页面内存，页面刷新后重新登录。只有按账号分区的非凭据上传元数据进入同来源、同标签页 sessionStorage；文件字节、密码、JWT、设备令牌和签名下载地址不保存。设备新令牌默认遮挡，一次性对话框关闭后即清空；切换账号销毁旧模块、终止请求并清除旧提示。所有业务文本用 DOM 文本节点显示。浏览器角色按钮不替代后端身份、成员及精确版本权限校验。
+
+只新增匿名静态 GET `/`、`/index.html`、`/ui/**`，原 API 与设备过滤链继续鉴权；静态 POST 仍拒绝，缺失静态资源保持 JSON 404，没有 API 路径兜底 HTML。响应加入 CSP（脚本、样式、连接限同源；不使用 unsafe-inline/unsafe-eval）、DENY、nosniff 与 no-referrer，不开放跨域凭据。四项新增安全契约计入 517 项后端测试。构建证据为 `.local/t028-build-final.log`。
+
+API 和上传协议的 31 项本地测试分别见 `.local/t028-api-tests.log`、`.local/t028-upload-tests.log`，直接执行两份 `.test.mjs` 可得到 15/16 项计数；本环境 `node --test` 汇总按两个文件计数，不能据此宣称只执行两项内部断言。纯模拟空列表 DOM 检查另见 `.local/t028-dom-smoke-final.json`：57 项通过，两个角色各工作区在桌面/移动端无横向溢出、页面异常或 CSP 错误。该层未访问真实业务服务，单独列示，不冒充真实联调。
+
+### 2. 最终 JAR 的真实页面闭环
+
+`verify-ui.py` 使用七个内存随机密码的独占账号、两台新设备、一个新任务及隔离 RabbitMQ 拓扑。Java 夹具只初始化账号、只读核对结果与安全收尾；正常成功状态均由 Chromium 页面和正式处理器产生，没有 SQL 伪造成功。应用启用原默认发布、消费者及恢复扫描。
+
+| 页面场景 | 实际证据 |
+| --- | --- |
+| 任务协同 | 委托方创建两项必交资料、分配管理员并加入复核/审批成员；运营方建立两子任务、两设备及执行批次后启动 |
+| 真实续传 | 合法 17 MiB PNG，服务器 8 MiB 分片，共三片；真实首片登记后暂停第二片，刷新丢失 JWT、重登同账号、重选原文件后只 PUT 第 2、3 片 |
+| 续传一致性 | 首片 SHA-256、登记时间、uploadId 与 clientRequestId 均保持；无重复会话、版本或存证尝试 |
+| 第二份资料 | 79 字节 PNG 单片正常定版；两份资料分别获得真实 CONFIRMED 和人工 APPROVED |
+| 精确共享 | 非成员申请第一版本，任务审批人批准；收件人仅看见第一版本，第二版本及父任务均 403 |
+| 文件核验/下载 | 原存储文件 MATCH、原样副本 MATCH、内容变化且 CRC 正确的合法 PNG 副本 MISMATCH；真实签名对象导航 HTTP 200，地址不持久化 |
+| 完成与撤销 | 运营方提交验收、委托方正式完成；完成后审批人仍可撤销授权，收件人失去版本读取；外部账号列表为空，直接资源访问 403 |
+| 独立核对 | 原始对象实际回读大小/全文件 SHA-256 一致，两个机构账本五字段一致，两个版本均仅一次真实链尝试，VALID/code=0 |
+
+最终截图为该运行的 desktop.png/mobile.png，无打开的凭据对话框及明文设备令牌，移动文档无横向溢出。截图中的两机上报进度均为 0%，因为此浏览器场景只演练业务上传，没有模拟设备进度事件；页面没有用资料齐全或任务完成伪造飞行进度。设备进度和换机语义沿用 T015/T016 的实际接口及既有验证。
+
+浏览器本机内容指纹覆盖完整文件，按固定 4 MiB 内容块摘要再生成根摘要，内存使用有界；它用于重新选择原文件时拒绝内容变化，不能称为文件本身的 SHA-256。正式版本 SHA-256 仍由后端校验实际文件字节产生。浏览器需要支持 Web Crypto；HTTP 开发使用 localhost/127.0.0.1，其他地址使用 HTTPS。
+
+### 3. 运行历史、真实登记与清理
+
+首轮 `.local/ui-probe/20261027T121259Z-cde13c26/verify.json` 为 FAIL：测试大文件错误地在 PNG IEND 之后追加填充，完整格式校验正常拒绝，未产生版本或链登记。改成 IEND 前合法 tEXt 块并计算真实 CRC 后，第二轮 `.local/ui-probe/20261027T121726Z-d0c75ff4/verify.json` 通过 204 项检查。随后根据实际截图修正标题混入图标、任务标题按钮及跨账号旧提示残留，最终 JAR 再次通过全部 204 项。三轮报告/日志及失败证据均保留，不把首轮计作通过。
+
+纯模拟 DOM 首轮的关闭按钮定位不匹配其 aria-label，报告 `.local/t028-dom-smoke.json` 保留；修正测试定位后最终 57 项通过。最初受沙箱限制的浏览器启动日志也保留，后续在授权的本地浏览器环境运行；这些属于工具/夹具修正，不修改后端 PNG 校验以放行坏文件。
+
+| 通过轮次 | 文件大小 | evidenceId / V1 | 实际首次有效交易 | 区块 |
+| --- | --- | --- | --- | --- |
+| 第二轮 | 17 MiB | `a423a889-fa2d-4b31-9085-4c48e15169fe` | `2709ad19d7d10fc0ace0ed1756e6e3c2c5f630ca23896f36ce9982da2e1ec1c1` | 45 |
+| 第二轮 | 79 B | `1fb43e4c-0833-4679-a8d1-41708e58c721` | `5991dce18c3d92071d9026a2f64f04eb0b6c640f9ba51caf866f1a37bf6f4124` | 46 |
+| 最终轮 | 17 MiB | `ecf86aaf-fb15-42d2-b4a1-0b9b541660e6` | `67c1d53058109ce178fbee6cf018cd60b70b70e8ed34b1b84e31f0acb3362ea4` | 47 |
+| 最终轮 | 79 B | `8335b44b-355e-4ded-aa6b-4592556cc736` | `908b209149950c4fa340d5d40aa231006eaca36e38518ba041935dfd8bb229a5` | 48 |
+
+四条实际登记及安全审计继续追加保留。大文件全 SHA-256 为 `d886e563a92679ace80b51394a33a0ab2a4ce15d062161cb73f8aab1501d7164`，小文件为 `ec81ce39789f63a8f58cd7c6ecaef171b4b944d665ea92d79b2c92175ea2726f`。每个通过轮次收尾删除自己的一个任务、七个账号、两台设备、两个上传及六个私有对象，保留 56 条夹具用户审计；Worker 内部审计另外正常追加，不把 56 当作全库新增总数。
+
+三轮收尾均为 cleanupPassed=true、originalBusinessDataUnchanged=true、originalCredentialsAndEnvUnchanged=true、ownedRabbitTopologyDeleted=true、ownApplicationStopped=true。原二十四表全字段/BLOB 摘要在 T028 专用域 `T028-original-twenty-four-fields-and-blobs-v1` 下仍为 `e22bcc44a5ff0c7dc733a11d62746977ddcb7c324d670b941119021b4f83b24d`；审计不在此比较域内，允许追加。原服务、配置、凭据及账本继续复用。
+
+
+### 4. 最终数据库、原 M2 与私有产物
+
+最终数据库报告 `.local/database-probe/20261027T122228Z-36868be8/verify.json` 为 PASS：248 项约束、原 Mapper 状态转换、UTC 往返和回滚协议通过，allProbeWritesRolledBack=true、sameBusinessSnapshot=true、sameFullMigrationChecksums=true。V1～V14 校验和保持，没有新增迁移。该工具二十四表域 `T025-full-twenty-four-table-snapshot-v1` 的摘要为 `3f4f724e360d2583d87b5935c2177e84c5da94c7ca2ec8acdfce65c2ad7b5138`；不同工具的摘要域分别比较，不跨域推断变化。
+
+`.local/t028-preservation-before.json` 为 PASS、matchesPreviousFinalRecheck=true，原十六表摘要为 `9bde39443ab668544ba0fbd21d241623dc775ee75763c6b98d2e7138500b30da`。浏览器清理及数据库检查之后、正式 M2 复查之前，`.local/t028-preservation-after-probes.json` 的 matchesT028BeforeWork=true：全字段/BLOB、逐表行数、迁移及演示凭据保持，全库核验仍为 48 条。
+
+原 M2 最终复查 `.local/mvp-demo/20261023T074934Z-34a10f3c/rechecks/20261027T122400Z-f5f99ce9/report.json` 为 PASS：15 次 HTTP/108 项检查。十四版迁移及 originalBusinessRowsUnchanged=true，只追加三次正式核验及审计；目标版本历史 45→48，全库 verification_record 48→51，追加后的原十六表摘要为 `822c5af3ed173fa18d377a73443beb45aef48a383252f96c7689d1ac64ee26e4`。
+
+原对象仍为 79 字节、SHA-256=`ec81ce39789f63a8f58cd7c6ecaef171b4b944d665ea92d79b2c92175ea2726f`；双机构仍返回原 txId=`6b0031134784a493c1f2139f8c7b7c471e6fbee7c2dedbcba95d921f9bf12799`、区块 13、VALID/code=0。transactionBytes/commitBytes 长度保持 4630/905，两个检查点摘要保持。原 M2 复查没有新增任务、文件版本或链登记；T028 新登记仅为上述两轮浏览器测试的区块 45～48。
+
+最终 UI、M2 实际运行与当前 JAR 的 SHA-256 一致，为 `a9fd9b75759be9797225173fe8ac3140b24d4989328b23378fe91864c8808ff6`。`.local/t028-artifact-audit.json` 为 PASS：68 份本轮 JSON/日志（包含失败运行及工具日志）均为 0600，四张截图为 0600；原 .env、演示凭据及 Gateway 身份清单仍为 0600。扫描包含已知服务/演示密码、droneTokens 及兼容 deviceToken，未发现这些凭据、JWT、PEM 私钥正文或原始签名下载 URL。全部自有后端、探针、浏览器和模拟静态服务器已结束，空消息拓扑已删除；未清库、删卷、改旧迁移或重建凭据。
+
+复验使用 JDK 21 和原有服务，先停止其他项目后端及消息消费者；Playwright 安装仅为可选验证依赖，见 [后端说明](../backend/README.md#最小管理界面与浏览器联调t028)：
+
+```bash
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+node frontend-tests/api.test.mjs
+node frontend-tests/upload.test.mjs
+python3 deploy/scripts/verify-ui.py
+python3 deploy/scripts/verify-database.py
+python3 deploy/scripts/verify-mvp.py --recheck .local/mvp-demo/20261023T074934Z-34a10f3c
+```
+
+T028 已完成，M1～M4 仍为通过；下一项 T029 整理全量接口示例、样例数据和演示脚本。T030 的 AC-01～AC-12 最终验收、T031 压测及后续部署复现/面试交付仍待执行，M5 和完整 MVP 尚未完成。
+
+
+## T029：全量接口示例、样例数据与保留演示
+
+| 项目 | 实际结果 |
+| --- | --- |
+| 日期 | 2026-10-27 |
+| 产物 | examples/README.md、t029.http、data/t029-task.json、修订 PNG；docs/t029-demo.md；run-demo.py、test_run_demo.py、只读 RetainedDemoInspector |
+| 接口与样例 | 控制器实际方法/路径与目录集合完全一致，48 项；手动模板 82 个请求、73 个变量，无未定义变量；原图/修订图均通过 PNG CRC 和 IEND 检查 |
+| 构建与本地验证 | JDK 21 clean verify：517 项后端测试，失败/错误/跳过均为 0；4 项脚本安全测试通过 |
+| 最终完整运行 | `.local/full-demo/20261027T134230Z-b3f7a036/report.json`，142 次 HTTP/916 项 Python 协调器检查，PASS；独立只读核验 89 个不同检查项，PASS |
+| 保留成果 | 两组各四设备/三子任务、一次换机、四固定版本、四正式复核、两精确共享及三次业务核验；两任务 COMPLETED，八条实际链登记保留 |
+| 阶段结论 | T029 完成，下一项 T030；M5、全部 AC 最终验收与完整 MVP 尚未完成 |
+
+### 1. 统一示例与真实样例
+
+[接口目录](../examples/README.md) 覆盖当前全部 48 项 `/api/v1` REST 方法/路径，内部 error、Actuator 及静态资源不计入。每项映射至实际分阶段请求；[t029.http](../examples/t029.http) 将六账号、四设备、三子任务、换机、旧新版本、复核、精确共享、核验及正式完成串联，并明确每次响应后手动更新编号/锁号。模板不是直接一次发送即可运行的脚本，82 个手动请求未在本轮逐条由 REST Client 执行；真正的完整业务由下述自动脚本执行，不把目录覆盖当作全部最终验收通过。
+
+`.local/t029-examples-audit.json` 为 PASS：controllerInterfaceCount=48、documentedInterfaceCount=48，missing/extra 为空，manualRequestCount=82、definedVariableCount=73，undefinedVariables 为空。任务样例有北、中、南三项必交资料。原图 inspection-sample.png 仍为 79 字节、SHA-256=`ec81ce39789f63a8f58cd7c6ecaef171b4b944d665ea92d79b2c92175ea2726f`；新增 inspection-revised.png 为 74 字节、SHA-256=`720067a8fbaf5b49eb10dde16503ffdc0b97a0e9aad4658e8a379645b392912f`。两图内容不同且各自 PNG 格式有效，原图未覆盖。
+
+### 2. 正式业务、失败续跑与可重复创建
+
+`python3 deploy/scripts/run-demo.py` 自行启动同一打包应用、随机 loopback 端口及自己的 RabbitMQ 拓扑，使用原六个预置账号，只登录，不 logout、不修改密码/角色/tokenVersion。新设备令牌、JWT 和下载地址只在内存。启动前拒绝全库在途上传、发布、存证、消费及清理任务，避免默认扫描影响原未完成业务。
+
+| 场景 | 本轮实际结果 |
+| --- | --- |
+| 多机任务 | 每组新建三项必交资料，加入双机构管理员、复核/审批和上传成员，三台初始设备、一台备用设备；三子任务启动 |
+| 设备与换机 | 正式设备身份心跳/进度，重复原事件返回同 id；北区进度 35 后换机，旧设备迟到 99 不进入新批次；当前三批次最终均为 100，旧批次 CLOSED |
+| 旧新成果 | 换机后的北区当前批次先产生 V1，APPROVED+CONFIRMED 后精确共享；同一批次提交 V2 重新 PENDING，旧授权不能读新版或父任务，V2 单独复核 |
+| 完成 | 中/南各一版本，各自真实确认并独立复核；三项当前最新版本均合格，运营方提交、委托方完成并写入 completedAt |
+| 精确授权 | 完成后撤销北区 V1 授权，再单独批准 V2；非成员按本次 taskId 筛选仅见 V2，V1/其他资料/父任务/任务审计均 403 |
+| 核验与下载 | V2 原对象 STORED MATCH、原样 COPY MATCH、修改偏移 36 的一个字节副本 COPY MISMATCH；实际签名 GET 返回 200 且字节等于 V2 |
+| 独立证据 | 每版一个已完成上传、一个正式版本、一个 VALID/code=0 原尝试；分片/正式 S3 字节及全 SHA-256 一致，双方账本五字段一致，原 commit 再查询有效 |
+
+这里的变更副本只用于摘要核验，不声称修改后的 PNG 容器仍有效；COPY 路径按现有协议核对字节，不覆盖正式对象。任务完成不靠设备 100% 直接推断。每组实际保留 10 个设备事件（重复请求未新增）、4 个执行批次、1 条换机记录、4 条 APPROVED 正式复核、2 条授权（V1 REVOKED、V2 存储 APPROVED）及 3 条核验。
+
+首轮 `.local/full-demo/20261027T133821Z-b9bab4b0/report.json` 为 FAIL：已产生四个真实确认/复核版本，110 次 HTTP/694 项检查记录中有一项统计断言失败。脚本把 `historicalVersionCount` 当成同批次的所有旧版本数量；实际该字段统计其他执行批次版本，同当前批次 V1/V2 时为 0。修正为实际语义，没有修改生产接口或通过 SQL 改业务成功状态。
+
+随后显式 `--resume` 在同批四版实际 CONFIRMED+APPROVED 的检查点继续，`.local/full-demo/20261027T133821Z-b9bab4b0/resumes/20261027T134122Z-bb988e5d/report.json` 为 PASS：49 次 HTTP/348 项检查，完成验收、撤销/独立共享、三种核验和实际下载；没有重新注册、上传或登记。原失败报告与资源清单保留，latest-resume.json 指向成功续跑，后续复查仍可使用源目录。
+
+最终脚本另从头创建第二组，142 次 HTTP/916 项协调器检查全部通过。第二组 taskId=`0a79f3c3-d5c0-4aaf-9a16-e86f15f1926e`，可用有权限的原账号在管理工作台读取；第一组 taskId=`0c3a1231-2ee2-4cae-b915-8c8aae212fd8` 也已完成并保留。两组共八台新设备、八个真实存证版本；原种子设备和两张原 M2 任务保持。普通再次执行创建新组，检查旧组使用 `--recheck`。
+
+### 3. 八条真实登记
+
+以下均为实际 VALID/code=0，双方普通应用身份查询一致，真实对象/原检查点已核对。首组续跑没有新增登记；八条仅来自两组各四次正式上传。
+
+| 组 | 资料版本 | evidenceId | 首次有效交易 | 区块 |
+| --- | --- | --- | --- | --- |
+| 首组 | 北区 V1 | `1eceabef-7ebd-4315-a661-773f93b12931` | `62a44885ad3a9bdee76154b6b2b6f17abad3aea75fd67a516e00555c6e463d75` | 49 |
+| 首组 | 北区 V2 | `1eceabef-7ebd-4315-a661-773f93b12931` | `debdd2fccbc205f22da45b9ff929624634765a11d11724489cb33e3d1a3c3c99` | 50 |
+| 首组 | 中区 V1 | `967812a1-b501-4563-b807-a46c6b4895a8` | `bb6572d712ce29bb35203304609ddfa78c133dc8a4fe03f810d588ca438f558b` | 51 |
+| 首组 | 南区 V1 | `2c641bdf-8e33-4a44-86aa-a8f8ec01f174` | `8f05d063afd5eec9980ca91b77f64bc411b5004ca3a8eefbef4cc8d084b03ed4` | 52 |
+| 第二组 | 北区 V1 | `352ee21c-a8e7-4db8-af85-2939896f6e0f` | `4a31fabe57ef85c50fa577b957ce713798057ad9d5a0748f6eba8545c8318d3a` | 53 |
+| 第二组 | 北区 V2 | `352ee21c-a8e7-4db8-af85-2939896f6e0f` | `dbceaa2b8a6e2020bb7b8b2f11ea1622ad78317a7c95cab92d75a52114801d0d` | 54 |
+| 第二组 | 中区 V1 | `72e09e84-cadc-4de1-8ea3-860ce7a3fd2f` | `938f508f781299b0e41a604858382dbb5e44992e338e92099cd7c03c29c201c8` | 55 |
+| 第二组 | 南区 V1 | `0968b602-ce31-4c0a-910c-270086018ac2` | `7318a9c54b058136a35cb7bc1f83a2e11a941da6d11020c5f35d6de0a3a0bf4a` | 56 |
+
+
+### 4. 只读复查与原行保护
+
+| 被复查的保留组 | 报告 | 实际 HTTP / Python 检查 |
+| --- | --- | --- |
+| 首组成功续跑 | `.local/full-demo/20261027T133821Z-b9bab4b0/rechecks/20261027T134342Z-afe36c80/report.json` | 30 / 220，PASS |
+| 第二组首次复查 | `.local/full-demo/20261027T134230Z-b3f7a036/rechecks/20261027T134446Z-59139318/report.json` | 30 / 213，PASS |
+| 第二组最终复查 | `.local/full-demo/20261027T134230Z-b3f7a036/rechecks/20261027T135108Z-3a5fc2ae/report.json` | 30 / 219，PASS |
+
+复查的六次登录 POST 正常追加 AUTH_LOGIN 审计，其余业务请求均为 GET，未重新申请、审批、核验、上传或登记。三轮只读 inspector 均为 recheckBusinessRowsUnchanged=true，按各自开始前完整二十四表快照比较，行数和所有字段/BLOB 完全一致；不是只凭“没有 POST 核验”推断没有业务修改。最终复查在原 M2 新增三次核验之后运行，完整业务快照摘要仍保持 `0e6ae640877ba0f15e57740b5c6409d6e1e5f39929a394de1b083b4363c4aba1`。
+
+只读报告最终将授权时间条件与存储状态一起投影：已撤销 V1 的 currently_valid=false，仍有效 APPROVED V2 为 true。早期报告曾仅投影“未超过截止时间”；已修正报告工具并另轮复查，早期报告保留。权限场景始终由真实 API 验证 REVOKED 拒绝，没有通过这个报告字段授予访问。自然到期时 API 可投影 EXPIRED，复查允许按当前时间失权，不把历史批准当作永久有效。
+
+T029 的创建前二十四表域为 `T029-original-twenty-four-row-fields-and-blobs-v1`，首组基线摘要 `d9e480adcc957d19003a436230b2b7946a89dff956032cb7c497fc2a6481574e`。首组完成后摘要 `6a5bf370b34087deca3edd127a163f5c291eb9e03401d8339c36f5fd2082f3f3`，作为第二组创建前基线；第二组完成后为 `9d8f8a4d5e547ce3851c274e7312e85f81450f2fe553eb830675cf488499f8b0`。每个创建后检查要求全部原行摘要仍在且保持，允许新演示行追加；不错误要求包含新增成果的整库摘要与创建前相等。
+
+`.local/t029-preservation-before.json` 的原十六表域摘要为 `822c5af3ed173fa18d377a73443beb45aef48a383252f96c7689d1ac64ee26e4`，matchesPreviousFinalRecheck=true。两组演示及数据库检查后的 `.local/t029-preservation-after-probes.json` 为 originalRowsFromT029BeforeWorkUnchanged=true：所有原主键、字段/BLOB、表结构及演示凭据摘要作为原集合完整保持；只追加预期演示行及六次核验。此时全库 verification_record 为 51→57，原 M2 版本核验历史仍为 48，未把演示副本核验写到原版本。
+
+### 5. 最终构建、原 M2 与私有产物
+
+`.local/t029-build.log` 的 JDK 21 clean verify 通过 517 项后端测试，失败/错误/跳过为 0；只读 helper 的后续保护/投影修正分别由 `.local/t029-helper-compile.log`、`.local/t029-helper-compile-final.log` test-compile 及实际 inspector 验证。没有修改生产恢复逻辑、API 或迁移。`.local/t029-script-tests.log` 的四项测试覆盖有效授权/自然到期复查只 GET、拒绝异常共享状态，以及签名地址仅内存接收/拒绝持久化。
+
+最终数据库 `.local/database-probe/20261027T134534Z-c4539971/verify.json` 为 PASS：248 项约束、UTC/Mapper 协议及全部回滚通过，sameBusinessSnapshot=true、sameFullMigrationChecksums=true，V1～V14 校验和保持。数据库工具二十四表域 `T025-full-twenty-four-table-snapshot-v1` 摘要为 `f230791f3a4a5d10547a3bb74fd812dc5e423d671d43ee2ebf7196e948e46d69`；不同工具摘要域分别比较。
+
+最终原 M2 复查 `.local/mvp-demo/20261023T074934Z-34a10f3c/rechecks/20261027T134653Z-24cec259/report.json` 为 PASS：15 次 HTTP/113 项检查，originalBusinessRowsUnchanged=true，只追加三次正式核验及审计。原 M2 核验历史 48→51，全库核验 57→60；新增后的原十六表域摘要为 `c21c9a267fa761c1e5d7f5d2ff1348a8093fc68eebee7cfeec459e9363e10494`。原 79 字节文件、SHA-256、版本、txId=`6b0031134784a493c1f2139f8c7b7c471e6fbee7c2dedbcba95d921f9bf12799`、区块 13、VALID/code=0 及 4630/905 字节的原检查点保持。复查没有新增文件版本或链登记。
+
+本轮所有演示/续跑/复查与原 M2 使用当前同一 JAR，SHA-256=`a810d0606a57b90e6bd420a876934aaff9f3f7ccf6cc40fbbfe5422a524c51b1`。`.local/t029-artifact-audit.json` 为 PASS：123 份 JSON/日志均为 0600，原 .env、演示凭据和 Gateway 身份清单仍为 0600；扫描未发现已知服务/演示密码、droneTokens/兼容 deviceToken、JWT、PEM 私钥正文或原始签名 URL。失败、续跑、三轮复查及工具日志均保留。自有应用停止、空消息拓扑删除；新业务、文件、八条链登记和全部审计保留，未清库、删卷、改旧迁移或重建凭据。
+
+运行和复查方法见 [完整演示说明](t029-demo.md)。T029 完成，下一项 T030 按当前集成版本逐项执行 AC-01～AC-12；本文示例及闭环不替代全部最终验收，M5 和完整 MVP 尚未完成。
+
+
+## T030：AC-01～AC-12 最终功能验收
+
+| 项目 | 实际结果 |
+| --- | --- |
+| 客户端验收日期 | 2026-10-28（Asia/Shanghai）；各组件保留实际 UTC 执行时间 |
+| 总入口与说明 | deploy/scripts/verify-final.py；[最终验收说明](t030-acceptance.md) |
+| 总报告 | `.local/final-acceptance/20261028T005626Z-d7114378/report.json`，PASS |
+| 验收范围 | 同一当前生产产物，17 个本轮新组件，AC-01～AC-12 全部通过；没有用历史报告替代本轮运行 |
+| 结果保留 | 原二十四表逐行/字段/BLOB、10 个正式对象及原登记保持；仅最终 M2 追加 3 条核验；28 条新链登记及审计追加保留 |
+| 任务结论 | T030 完成；下一项 T031；M5 和完整 MVP 尚未完成 |
+
+### 1. 当前产物、源码和部署绑定
+
+`.local/t030-backend-build.log` 的 JDK 21 clean verify 通过 517 项后端测试，失败/错误/跳过均为 0；`.local/t030-chaincode-build.log` 的链码 clean verify 通过 50 项测试，失败/错误/跳过均为 0。API/上传协议分别 15/16 项、模拟器 20 项、演示安全 4 项及协调器安全 8 项测试通过，对应 `.local/t030-*-tests.log`。协调器单测验证子检查失败不能被总 PASS 掩盖、缺失组件不能通过、同数量原行/BLOB 被改不能通过、迁移/凭据变化被拒、残留夹具行被拒以及仅允许最后三条 M2 核验追加。
+
+本轮新增总协调器和只读工具，不修改生产业务接口、迁移或恢复算法。AcceptanceFlowProbe 增加四次只读复核回读，核对真实确认之后初版 RETURNED 及原 reason/复核记录保持、更正版独立 PENDING→APPROVED。原数据补核验扩展 RetainedDemoInspector 的 original-objects 只读分支；后续 test-compile 和独立实际调用通过，不重新打包或改变生产 JAR。
+
+当前后端 JAR SHA-256=`16373ee5bf0e33203d03da8db45a01bc5d3e01f780f289a2d423ab2bf90916bf`；全部 target/classes 与该 JAR 的生产类/静态资源逐文件一致，productionClassesSha256=`27f741fdf08d6d9d77dc8a27962e1753c5aafc848831ffe137c01cd614a45912`，productionSourceSha256=`7745a6c3c90072527a24db467cb17821dc71918753c5f19de9112cb662e37189`，依赖 classpath 摘要 `85d6fb09176dc758d17dd4ce30ab19fb736b2d115d0ede2dd0313e7766ffcae0`。这些绑定贯穿组件前后和最终收尾，Java 探针及打包 UI 对应同一生产实现。
+
+链码 JAR=`612301eb01625740f04dae8dae55fb1d8c1ce62f9f5bfb6f09ea1d81ed35bb17`，与原 artifact-lock/deployment 记录一致；两个实际 CaaS 容器内 /app/chaincode.jar 及镜像 ID 一致，双方已提交的两 Peer AND 背书策略和批准包核对通过。没有重新部署、升级链码、重置通道或替换普通 User1 身份。CaaS packageId 只覆盖连接元数据，未用它单独证明 Java 代码相同。
+
+### 2. 新执行的组件与原始证据
+
+以下 HTTP 数按源报告的业务 API/子客户端计数，链 CLI、S3 SDK、SQL 和浏览器检查另列；表中检查数有 Java 断言、协调器检查、浏览器检查及 SQL 约束等不同口径，不将它们混成吞吐、P95 或性能指标。多机包含 57 次 Java HTTP 和 27 次模拟器 HTTP，多片包含 79 次 Java HTTP 和 9 次上传 CLI HTTP。
+
+| 组件 | 实际 HTTP / 检查或约束 | 新链业务登记 | 原始成功报告 |
+| --- | --- | --- | --- |
+| 设备/真实离线 | 79 / 614 | 0 | `.local/device-probe/20261028T005629Z-e89226e5/report.json` |
+| 多机与换机 | 84 / 473 | 0 | `.local/swarm-probe/20261028T005648Z-7e5a60ab/report.json` |
+| 双 JVM 多分片 | 88 / 648 | 0 | `.local/multipart-probe/20261028T005709Z-5411c33e/verify.json` |
+| 原对象/副本及异常核验 | 62 / 588 | 1 | `.local/verification-probe/20261028T005743Z-80f735b7/report.json` |
+| 精确共享与下载 | 126 / 889 | 2 | `.local/sharing-probe/20261028T005805Z-81bf1e73/report.json` |
+| 复核/正式验收 | 136 / 994 | 7 | `.local/acceptance-probe/20261028T005841Z-59a373ed/report.json` |
+| 权限/并发/终态 | 183 / 1322 | 4 | `.local/regression-probe/20261028T005929Z-83d0aadb/verify.json` |
+| 引用感知清理 | 30 / 303 | 0 | `.local/cleanup-probe/20261028T005959Z-12f48ce0/verify.json` |
+| 发送/ACK/死信 | 19 / 1088 | 1 | `.local/messaging-probe/20261028T010038Z-53813ef1/verify.json` |
+| 长读取/续租/默认扫描 | 26 / 272 | 3 | `.local/recovery-probe/20261028T010359Z-ad0f96c1/verify.json` |
+| 真实崩溃矩阵 | 43 / 275 | 6 | `.local/fault-matrix/20261028T010847Z-19b5b276/report.json` |
+| 链码合约/部署绑定 | 3 笔 VALID 交易 / 7 项合约场景 | 2 | `.local/final-acceptance/20261028T005626Z-d7114378/components/chaincode-08624467/verify.json` |
+| 打包 UI/Chromium | 205 / 204 | 2 | `.local/ui-probe/20261028T011517Z-16474d00/verify.json` |
+| 真实数据库约束 | 无 HTTP / 248 项约束 | 0 | `.local/database-probe/20261028T011658Z-c30406d1/verify.json` |
+| T029 首组只读复查 | 30 / 220 | 0 | `.local/full-demo/20261027T133821Z-b9bab4b0/rechecks/20261028T011725Z-cd3b0921/report.json` |
+| T029 第二组只读复查 | 30 / 213 | 0 | `.local/full-demo/20261027T134230Z-b3f7a036/rechecks/20261028T011753Z-acb4a256/report.json` |
+| 原 M2 复查 | 15 / 109 | 0 | `.local/mvp-demo/20261023T074934Z-34a10f3c/rechecks/20261028T011818Z-1cee768c/report.json` |
+
+消息组件的 1088 项检查是本轮实际值；没有套用 T022 历史 1248 项计数。故障矩阵的 43 次 HTTP/275 项协调器检查来自发送/候选组 23/120 与 Fabric 组 20/155，子 JVM 自身未单独累计的边界断言不伪造计数。浏览器为 205 次 API 响应/负例记录、204 项检查，实际截图在本轮 UI 目录生成，凭据对话框关闭，移动文档无横向溢出。数据库 248 项约束全部回滚，原十四版迁移校验和保持。
+
+### 3. 十二项预期与实际结果
+
+| AC | 本轮实际结果及证据 |
+| --- | --- |
+| AC-01 | sharing/regression 的双机构登录、SQL 权限分页、非成员无授权详情/下载/核验拒绝、同 JWT 当前权限重验及精确版本范围均通过；原机构管理员身份不能代替任务成员 |
+| AC-02 | 5 台新设备、3 个并发模拟器、3 个子任务；初始缺失项明确，重复原事件/重放不新增累计，实际文件与当前成果关系通过 |
+| AC-03 | 设备独占进程 onlineThreshold=2 秒，真实等待 2200ms 后按服务器时间离线，Redis 不可达回 MySQL；人工换机和旧设备恢复在线、迟到资料/较大历史版本不覆盖当前成果通过。模拟器丢包周期单独记录，不冒充真实离线 |
+| AC-04 | 两个不同真实 JVM 在原会话继续分片，已登记片复用、相同内容重试、并发/重复完成唯一事件/版本、完整字节摘要通过；无引用旧候选清理与在途/正式引用保护通过；UI 刷新重登只补缺片 |
+| AC-05 | 初版真实 RETURNED、合法更正版重新 PENDING 并独立 APPROVED，两版实际存证确认；新增 HTTP 回读确认原结论/原因及两 versionId 保持。并发复核仅一个正式记录 |
+| AC-06 | 普通 OrgB User1 实际登记、两机构读同一五字段；OrgA 写入、不同摘要及非法版本在背书前被拒。新同摘要调用 VALID 但 evidence writes=0，首次交易编号保持；第二版不覆盖第一版 |
+| AC-07 | 原对象及原样副本 MATCH、一字节变更副本 MISMATCH；实际对象/版本、Outbox 等正式数据不因 COPY 改写。变更副本不声称仍为格式有效 PNG |
+| AC-08 | 本次自有正式对象实际 DELETE 后 FILE_READ_FAILED，原对象恢复；未消费、链无记录版为 ANCHOR_UNCONFIRMED；真实查询后在响应边界注入丢失为 CHAIN_QUERY_FAILED。五类结果分别持久记录，没有误报篡改 |
+| AC-09 | 待批拒读/拒签发、批准后精确访问、真实数据库时间自然到期失权和撤销后失权通过；未复核/未确认、仅复核、仅确认三种不合格版本均拒批，旧授权不开放新版或父任务 |
+| AC-10 | 实际 SigV4 截止受 300 秒及授权剩余时间限制；撤销后新签发 403，原已签 URL 在原期限内仍实际 GET 200；审计仅为地址签发，不将签发假记下载成功 |
+| AC-11 | mandatory-return、发布确认后真实 halt、重复投递/ACK 门槛、持久重试、长 I/O 续租/失续租 fencing、默认扫描恢复、六个真实崩溃窗口、重复 UNKNOWN 退避及原交易恢复全部通过 |
+| AC-12 | 缺资料、仅收齐分片、未复核/未确认最新版本及当前 optional VERIFYING 阻挡完成；当前 V5 胜过旧 CLOSED 批次 V6，历史不误挡；完成时间写入后拒新上传/定版/异常/复核/换机，迟到 Worker 不生成新版本 |
+
+总报告的 acceptance 中 AC-01～AC-12 均为 passed=true；每项由具体检查名/必要 flags 门控，缺失证据或子检查 false 不能仅凭组件总 PASS 放行。原始报告路径和 SHA-256 作为 files 登记，组件工具摘要记录在 toolSourceSha256。
+
+### 4. 真实时间与链记录
+
+续租组件在真实 S3 流中受控延迟 123013ms，成功文件续租 5 次；失续租停止旧 Worker 业务写入。恢复前等待剩余租约 85573ms 自然到期，再由默认文件/链扫描恢复；原 transaction/commit 字节保持。该延迟用于可靠性实验，不是对象存储性能数据。
+
+发送/候选与 Fabric 两组的六个退出发生在真实独立 JVM，未用普通异常代替 halt：领取提交后发送前、实际 publish confirm 后/SENT 前、实际 S3 候选 PUT 后/正式版本前，以及原交易提交前、真实提交返回后/commit 检查点前、确认返回后/业务结果落库前。沿用生产 120 秒租约自然到期，Fabric 恢复实际等待剩余 115689ms，重复 UNKNOWN 后保留退避并恢复原交易。RPC 不可用为本次测试装配调用边界注入，没有停止共享 Fabric 网络。
+
+本轮新增 28 条业务链登记，其中核验 1、共享 2、正式验收 7、并发回归 4、消息 1、续租 3、崩溃矩阵 6、链码直接合约 2、UI 2；临时 SQL/对象夹具清理后链记录仍保留。同摘要额外调用另形成 1 笔无证据写入的 VALID 交易，因此实际新增有效交易为 29 笔，不把“无重复业务结果”写成“完全无新交易”。
+
+链码本轮 V1 首次交易为 `1794cedae43db360ee9cf3b33d299c4f4871117bf741f753af61e646adeeac78`（区块 81），相同摘要新交易为 `0f9b7e9fad9553092aaef57eadb316213a66edc19c1a21bfd06ccb8ead18186c`（区块 82，evidence writes=0），独立 V2 为 `0211edfe4c64cbf6910a93b435dd1bc8092beedcac7a30a5ef4d663488e1a651`（区块 83）。完整两 Peer VALID 回执在 chaincode 组件的 verification.json；全体业务登记的真实编号、确认/对账依据和检查点摘要见各组件原报告。
+
+
+Fabric 提交返回后但尚未保存 commit 检查点的场景，允许凭两机构一致的有效业务登记完成对账；本地尝试仍为 SUBMITTING、commitBytes 为空是实际历史。报告保留确认依据和崩溃前 oracle，没有补造本地 VALID、字节或第二个交易来满足断言。
+
+### 5. 全部原始对象、数据和私有产物
+
+总协调器在每个组件前后读取一致的二十四表全字段/BLOB 快照与迁移历史，补齐旧工具各自十六至二十四表保护范围的差异。原四任务、九设备、十版本及全部旧业务行完整保持。T030 初始快照域沿用 `T029-original-twenty-four-row-fields-and-blobs-v1`，摘要为 `0e6ae640877ba0f15e57740b5c6409d6e1e5f39929a394de1b083b4363c4aba1`；最终为 `15ac4cf5d0f59ef7af6df9da77d7a29dc338da2308645482e3f90e8f3d04711d`。不同是最终原 M2 复查追加的三条核验，原行摘要全部保持。
+
+仅保护 SQL 中的 objectKey/摘要不足以证明实际文件仍在，因此收尾还按初始 evidence_version 主键集合，实际 GET 全部十个原正式对象，逐个核对大小和完整 SHA-256，并对其已确认版本查询两机构五字段与原首次交易。总报告 originalObjects.passed=true、originalFormalObjectCount=10，结果位于 `guards/original-objects-e070c958.json`，覆盖 T029 演示之外的原文件。两组 T029 的本轮新只读复查也为 recheckBusinessRowsUnchanged=true，未新增核验或交易；认证审计正常追加。
+
+最后原 M2 本轮复查为 15 次 HTTP/109 项检查，原版本核验历史 51→54，全库 verification_record 60→63。原文件仍为 79 字节、SHA-256=`ec81ce39789f63a8f58cd7c6ecaef171b4b944d665ea92d79b2c92175ea2726f`，原 txId=`6b0031134784a493c1f2139f8c7b7c471e6fbee7c2dedbcba95d921f9bf12799`、区块 13、VALID/code=0 和原 4630/905 字节检查点保持。其原十六表域的新摘要为 `5b790176acd0386cd9a582e8525b7a6f22fb5810c61d1a0b411e5759f2302830`；不同工具摘要域分别比较。
+
+十七个组件的主矩阵首轮全部通过，最初总报告已独立归档为 report-before-original-object-integration.json。补核验首次把输出放在不满足 0700 条件的父目录，工具在连接业务服务前拒绝，日志 `.local/t030-original-objects.log` 保留；改用独立私有目录后通过。随后将该只读检查并入统一入口，生产绑定未变，以 --resume 验证原证据哈希和组件工具摘要，只复用本矩阵十七个成功组件，再执行全对象和最终数据检查；没有重复上传、核验或链登记。更新后的总报告仍为 PASS，没有用修改原失败报告掩盖问题。
+
+总报告内的私有产物检查覆盖 244 份 JSON/日志，均为 0600。扩展检查 `.local/t030-artifact-audit.json` 为 PASS：包含本轮构建/单测、主矩阵、独立补核验及失败日志共 270 份 JSON/日志；5 份 PNG（2 张浏览器截图及样例）与 2 份保留故障临时文件均为私有权限。已知服务/演示密码、原设备令牌、JWT、PEM 私钥正文、原始签名地址及原始凭据字段均未出现在这些产物中；原 .env、凭据、身份清单及两个 User1 私钥保持仅 owner 可访问。
+
+较早跨 JVM 工具本次会将随机夹具凭据短暂放入 0600 文件，结束均删除，不宣称全程只有内存。业务夹具及自己的空消息拓扑已清理，安全审计和二十八条实际登记保留；项目后端/业务探针已停止，基础设施和原链网络继续运行。未清库、删卷、改旧迁移或重建凭据。汇总数及源路径另见 `.local/t030-summary.json`。
+
+### 6. 收尾与下一步
+
+统一入口、组件映射、恢复限制及故障证明边界见 [T030 最终验收](t030-acceptance.md)。当前 AC-01～AC-12 均已通过，T030 完成；这是一轮功能/可靠性验收，不把人工延迟、HTTP 数量或检查次数当作性能结果。下一项 T031 在功能通过的固定版本上实际测量性能和资源，T032～T034 的部署复现、面试材料及最终交付仍待完成，M5 和完整 MVP 尚未完成。
+
+## T031：固定功能产物的性能与资源实测
+
+| 项目 | 实际结果 |
+| --- | --- |
+| 日期 / 状态 | 2026-10-28（Asia/Shanghai），T031 已完成；M5 未完成 |
+| 本轮报告 | `.local/performance/20261028T020815Z-c952459a/report.json`，PASS |
+| 负载执行时间 | 02:08:15.988～02:11:31.372 UTC；资源观测02:08:32.500～02:11:08.221 UTC |
+| 固定功能基线 | T030 `.local/final-acceptance/20261028T005626Z-d7114378/report.json`；五项生产产物摘要前后完全相等 |
+| 工具验证 | JDK21 离线 `test-compile` 成功；21项性能/采样工具测试通过；Python语法及空白检查通过 |
+| 完整方法与数值 | [性能记录](performance.md)，包含环境、配置、全部阶段及逐文件结果、时钟/资源口径和限制 |
+
+### 1. 运行范围与环境
+
+新增 `run-performance.py` 和标准库 `perf_resources.py`，复用打包应用的独占运行/停止/空拓扑保护、UiBrowserFixture独立账号与精确清理、RetainedDemoInspector原二十四表和对象保护；新增SELECT-only PerformanceInspector获取数据库时间与正式对象/真实账本/原commit证据。生产接口、配置、迁移、链码和依赖没有因本轮测量更改。
+
+本机Ubuntu22.04.5、Linux6.8.0-138、8可见逻辑CPU（AMD Ryzen7 8845H）、约15.57GiB内存；Temurin21.0.12+8、Python3.10.12、Docker29.7.2、Compose5.4.0。MySQL8.4.11、Redis7.4.11、RabbitMQ4.2.9、Garage2.4.1、Fabric2.5.16及双CaaS与客户端/后端共宿主。后端affinity8、可读cgroup没有有限CPUquota/memory.max；两CaaS各512MiB，其他容器没有配置内存限额。上述为观测可见范围，不表示资源独占。
+
+正常启动local,database,storage,messaging,ledger的同一已验收JAR，随机loopback端口，独立消息拓扑和presence前缀；Outbox1000ms、恢复10000ms、定版/存证各一消费者prefetch1、Hikari最大5，未为成绩调参。3新账号、5新设备、5资料/子任务、1个新RUNNING任务与原保留成果隔离。每worker独立HTTPConnection、keep-alive；HTTP传输计时后再解码/断言/落盘，不自动重试业务POST。
+
+### 2. 查询与多机上报
+
+每端点并发1/3/5，各worker先5次预热后同时开始；每worker至少40次且阶段至少10秒。9个查询阶段合计30,343次成功、0错误/超时，另排除135次预热。逐端点P95（ms，按并发1/3/5顺序）：
+
+| 查询 | P95 ms |
+| --- | --- |
+| 同一五子任务的进度 | 14.97 / 17.10 / 26.88 |
+| 同任务版本列表（仅1本轮版本，pageSize20） | 11.14 / 10.39 / 10.39 |
+| 同一固定版本详情 | 9.18 / 8.78 / 9.38 |
+
+设备拥有独立凭据、稳定bootId、递增seq、新eventId和真实执行批次；分别3与5 active worker、不pacing，各至少10秒。正式上报865/891次，全部成功；P95为44.02/66.49ms，闭环吞吐86.28/88.70请求每秒。5是配置设备数，active是负载worker数，不把presence缓存数当作实时并发证据。
+
+独立逐条重算32,099个正式请求：duration等于单调ns端点差，样本/worker计数、min/mean/P50/P95/max、吞吐和连接复用均与report相等；阶段互不重叠、每请求位于对应窗口，单worker请求无自身重叠，trace均唯一。设备事件快照`1816−20=1796=1756正式+40预热`，证明无幂等重放充数。API预热请求原文本身未单独落盘，5次循环由保留源码证明；不扩大该证据边界。
+
+### 3. 上传、定版及真实有效确认
+
+合法16×16 PNG，79B为预热；在IEND前增加合法CRC的tEXt块得到精确1MiB、17MiB文件。正式6个1MiB及5个17MiB，不使用尾部非法填充。大文件测试覆盖传输/CRC/合并/存储，不代表高分辨率图像解码。分片由服务端规格决定，1MiB为1片、17MiB为3片。
+
+| 正式阶段 | 文件数 | 组完成s | 202接收P50/P95 ms | 创建至确认观测P50/P95 ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1MiB串行c1 | 3 | 11.58 | 21.79 / 23.07 | 4021.86 / 4042.98 |
+| 1MiB并行c3 | 3 | 7.46 | 42.70 / 47.78 | 5381.27 / 7455.60 |
+| 17MiB并行c5 | 5 | 14.24 | 70.83 / 80.84 | 10065.79 / 14224.15 |
+
+正式11/11成功，加1预热为12个版本。HTTP202仅表示接纳，独立记录COMPLETED与CONFIRMED首次观测；250ms轮询及HTTP/调度误差计入观测，不能称纯commit延迟。每组n3/n5的nearest-rank P95即最大值，逐文件数值保留，不据此宣称生产尾延迟或SLA。
+
+`timings.json`以数据库UTC DATETIME(3)记录因果检查点，12×5项差值均能由原始时间精确重算。正式PREPARED持久化→VALID落库2035～2059ms，含提交/查询/持久化，背书在其前；不是纯Fabric共识/commitRPC。定版意图→版本创建135～1617ms，存证创建→确认2374～11491ms，均包含各自排队/处理开销。Outbox.sent_at可能晚于消费开始，本轮没有将它作处理起点。
+
+12个实际正式对象逐字节实读，大小/SHA均匹配；双方ledger五字段完整相等，原transaction包含正确三参数和双机构背书；每版唯一原attempt、VALID/code0、retry_count0、原commit重查区块一致。12不同交易位于块86～97，账本记录及安全审计保持追加语义。
+
+### 4. 资源与测量成本
+
+156次后端/客户端采样、76次Docker批量调用，9容器共684条观察，资源采样错误0；14正式阶段每容器57有效快照。进程CPU按一核100%、真实HZ100和页4096B计算，均值按有效同阶段区间加权；10秒查询/设备阶段通常9秒CPU覆盖，跨phase区间不作补零。后端最高阶段CPU均值120.7%（8核分母为15.1%），正式阶段观测RSS峰678.6MiB；客户端17MiB×5阶段RSS峰154.8MiB，分别记录。
+
+进程平均间隔1.0007s；Docker每次约2.050s、实际间隔2.051s，17次跨phase调用排除。1MiB c3每容器仅2快照，其余阶段约4～6，峰值只能称观测峰值。Docker MemUsage与RSS不同，CPU快照算术均值与进程时间加权均值不同。两个Python采样线程CPU合计0.249s，不含DockerCLI/daemon成本；约155.84s Docker墙钟等待不是CPU消耗。未扣除监控/客户端/其他主机活动干扰，也未做无监控对照，不能据RabbitMQ尖峰或RSS阶段变化推定瓶颈或泄漏。完整14阶段和9容器表见performance.md。
+
+### 5. 原数据、产物和收尾
+
+baseline/after完整24表schema、250原行逐字段/BLOB摘要与数量、原迁移、凭据/.env摘要精确一致，snapshotSha256=`15ac4cf5d0f59ef7af6df9da77d7a29dc338da2308645482e3f90e8f3d04711d`。独立读取全部10原正式对象及双方原登记通过。未登录/退出原6用户，未额外调用M2核验增加记录，verification_record保持63。
+
+本轮删除1任务、3账号、5设备、12upload及34私有对象（12正式、22分片），待处理工作全部0；仅删除自己的空消息拓扑，停止自己的后端与采样线程。12真实登记保留；68条保留审计仅指新账号actor记录，非全局追加总数。隔离presence自然TTL过期后，对五个精确键只读EXISTS为0，无SCAN/DEL/FLUSH。补核对位于post-checks.json。
+
+实际负载脚本/资源模块/Javahelper的副本保存在measured-*，摘要见measurement-tools.json。负载结束后把工具/有效配置记录、设备事件对账和Redis过期检查自动纳入当前脚本；AST核对measure/upload/closed_loop/api未改变，不重跑12次登记改写成绩。后置证据单独引用post-checks.json，不改写原成功report来伪称初始即有。
+
+artifact-audit.json检查此前全部46份运行产物：目录0700、文件0600，已知旧秘密、JWT、私钥、签名地址及报告中的原始对象键检查通过，生产5项绑定仍与T030一致。新随机口令/设备秘密仅在stdin及进程内存使用，停止后不能做它们的精确值扫描，不把模式扫描夸大为可证明任意秘密不存在。完整T030矩阵没有因未变化的生产实现重复执行。
+
+T031完成，下一项T032为隔离干净开发环境的部署复现、普通重启持久性和README完善；T033面试材料、T034最终交付仍待进行，M5和完整MVP尚未完成。
+
+## T032：干净业务状态部署复现与普通重启
+
+| 项目 | 实际结果 |
+| --- | --- |
+| 日期 / 状态 | 2026-10-28（Asia/Shanghai），T032已完成；下一项T033，M5未完成 |
+| 成功报告 | `.local/deployment-repro/20261028T143649Z-8cd56664/report.json`，42步骤PASS |
+| 实际时间 | 14:36:49.645～14:41:13.503 UTC，即北京时间22:36:49.645～22:41:13.503 |
+| 独立目录 | 该运行的workspace；369份源码/文档/示例，没有复制原配置、凭据、target、身份或业务/账本数据 |
+| 构建 / 工具 | 从零targets离线clean verify：517后端、50链码测试通过；32项部署工具测试通过，失败/错误/跳过0 |
+| 详细方法、命令及边界 | [部署复现记录](deployment.md)，[根README](../README.md#首次部署) |
+
+### 1. 部署支持及隔离范围
+
+新增verify-deployment.py统一入口、deployment_demo.py正常演示扩展；业务Compose显式配置INFRA_COMPOSE_PROJECT_NAME，基础设施探针状态绑定该项目。Fabric新增settings.py集中配置project、四宿主端口、CaaS镜像tag，内部DNS/监听/锚节点不改；新材料绑定deployment_namespace，后续prepare/up/stop/remove/channel/deploy拒绝漂移，原无标记材料仅兼容原默认值。
+
+新项目为uav-repro-171890206f1d-infra/fabric，镜像uav-inspection/repro-171890206f1d:0.1.0；九个宿主端口随机选择并实际绑定。新.env/.local凭据、crypto身份、genesis、8个命名业务/账本卷均独立；官方Fabric镜像另有6个匿名卷，按已知位置校验且全部标识在stop/up后保持。子进程净化原服务地址、秘密及Spring/Compose覆盖。源码复制排除原.env/.local/targets、deploy私有目录，拒绝路径穿越和符号链接逃逸。
+
+同一Linux amd64主机复用固定镜像、两个已SHA校验的Fabric归档及独立复制的183MiB Maven缓存，工具重新从归档安装；未复用原tools/materials/runtime.env。不是新OS或冷网络安装实验，联网首次下载与其他平台未在本轮执行。
+
+### 2. 初始化及真实应用/模拟器
+
+新库初始无业务表，先运行infra seed→stop/up→check，验证MySQL、Redis AOF、Rabbit持久消息与S3数据，精确清理探针表后再启动应用。新材料从固定工具/样例生成证书和genesis，创建通道，双方安装/批准并提交evidence0.1.0/sequence1，实际AND双PEER策略通过。
+
+首次run-backend --demo --ledger执行Flyway V1～V14，原迁移校验和一致，创建2机构、6账号、1设备；任务、上传、版本、device_event均0。等待Demo data ready后检查状态接口、首页及/ui/app.js的HTTP200；这不是新一轮浏览器交互回归。
+
+deployment_demo启动正常local,database,storage,messaging,ledger处理，真实simulator/swarm.py三worker各2轮、间隔0.1s、无离线/重放/上传，3个HEARTBEAT加3个PROGRESS共6请求全部接纳，每worker duplicate/transient/pending均0。随后正常演示继续人工换机、旧批次迟到隔离、四版本上传/存证/复核、共享/撤销/下载、原文件/副本核验和正式完成。
+
+创建阶段报告142次API/923项检查，另有6次模拟器HTTP和实际签名下载GET；923不是独立单测数。模拟器summary/log/3state共5份SHA匹配，状态回执与设备/批次/boot/seq一致，临时0600设备凭据配置在finally删除。新库最终16个device_event含正常演示额外10个，不全归模拟器。
+
+### 3. 整套普通重启及数据保持
+
+演示成功后新环境24表共91行：1任务、5设备、3子任务、4执行批次、4上传/分片/固定版本、4链提交/attempt、3核验、4复核、2授权等。新4版本均APPROVED/CONFIRMED、单原VALID/code0，原commit实际重查询，双机构evidence/version/hash/msp/firstTx完整相等；区块4～7。
+
+记录新24表全字段/BLOB/迁移及配置凭据、正式对象与链快照后，再写基础设施持久探针。全部9容器明确stop，确认exited，再用同一配置up；复用同一容器ID、镜像和全部卷。重复prepare保留证书/genesis，channel复用已有通道，deploy复用原批准包/定义；第二次部署前后无新块，首次部署正常创建生命周期批准及定义。
+
+第二轮infra check验证同一数据库marker、Redis AOF、Rabbit持久消息、S3字节/匿名拒绝/签名到期，再精确清理自己的探针。重复init-env/init-demo-credentials均保留原文件，普通--demo --ledger再次启动、初始化匹配并通过HTTP/静态资源检查。
+
+停止前台应用后只读复查30次API/217项检查通过，0新任务/登记/业务核验。重查应用按既有规则禁用后台，普通默认后台启动另由两次启动与四版本真实处理证明，不把只读复查称为恢复故障实验。
+
+copy-before/after-restart的24表schema、91行逐字段/BLOB、完整迁移、.env及凭据完全相等，snapshotSha256=`5585b5fbc0cd2a7b68f95004fbd87ffc3494e866e7494e31850230bdfab03895`；审计表另行追加。4正式对象为3×79B、1×74B共311B，重启前后实读及双方登记完全一致；桶内另有业务分片，不能称整个bucket仅4对象。
+
+新Peer/Orderer高度始终8，当前块哈希`GtNL5lnvcAWN5yBhDyAnAF9evIrjUVbK8yNHQtK09Vs=`；genesis、证书指纹、namespace及双方定义保持。链两快照除检查时间外逐字段相等。两次部署日志同一镜像manifest为`sha256:7ed2f626faccac3791ee4fddbd7588529fcc086a281f7d139822369f66696890`。首次deployment.json被第二次更新，未保存两份JSON，不夸大证据。
+
+### 4. 原环境及构建产物保护
+
+整个复现期间原环境未停止或重建。原24表250行、schema、敏感BLOB摘要、完整迁移及凭据/.env精确保持，snapshotSha256仍为`15ac4cf5d0f59ef7af6df9da77d7a29dc338da2308645482e3f90e8f3d04711d`。实际重读原10正式对象及双机构原登记通过，原verification_record保持63。未登录退出原六账号，原容器ID/镜像ID/卷标识和原CaaS镜像tag保持，T030五项生产绑定完全不变。
+
+原Peer/Orderer高度98、当前块哈希`YKO0XSEEFMeRBJhq2kKlXDsjn4niE9YpbpV9CihlxBU=`及身份/genesis前后保持，原链无新增交易；4个新业务登记在独立新链。新旧两套各16私钥，摘要集合无交集，均0600，未输出私钥内容或其摘要。
+
+从源码新构建的链码JAR SHA=`612301eb01625740f04dae8dae55fb1d8c1ce62f9f5bfb6f09ea1d81ed35bb17`，与原完全相同。后端生产源码与完整classes/资源SHA也相同。新后端JAR整体SHA=`2530cd9cdcbc94b8fd26f2b3ebdac5ded3e038e70cde02abf85f9470646d771d`，与原不同，但679个ZIP条目的解压载荷逐字节一致，409条元数据不同；不宣称整个后端JAR字节级复现。195个依赖按顺序的名称及实际JAR摘要一致，classpath清单SHA差异来自绝对目录。
+
+### 5. 失败记录、隐私及收尾
+
+首次目录20261028T143448Z-6e1eaf3c在只读预检被匿名卷过严规则拒绝，未创建或启动新环境；保留失败报告。修正仅对Fabric项目的两个已知匿名卷位置放行，命名业务/账本卷仍要求project前缀；补齐应用停止、Fabric停止或inventory失败仍独立尝试其他收尾及原环境guard的测试，再以新目录完整42步骤通过。
+
+post-checks.json补存ZIP/依赖/独立私钥及隐私检查：成功运行的110份生成JSON/日志均0600，已知原/新秘密、JWT、PEM私钥、签名地址和原始业务对象键未出现；预期含秘密的.env/凭据另核对0600，不纳入内容无秘密结论。临时模拟器配置物理不存在；新API设备令牌由运行时写入护栏及simulator日志/state检查精确保护，停止后无法按其原值再次扫描。所有私有产物仍只在.local下。
+
+README已按首次部署、日常启停、模拟器/真实演示和隔离复现重排；配置样例、基础设施/Fabric/后端说明及设计/任务入口同步。新9容器已停止、全部卷/身份/成果保留便于复查，原9容器继续运行；没有删除卷、清库、重建原凭据或停止原网络。本轮未重复完整17组件T030矩阵，生产实现未因部署层小改变化。
+
+T032完成。下一项T033整理演示与面试材料，T034最终交付核对仍待执行，M5与完整MVP尚未结束。
+
+## T033：项目演示与面试材料
+
+| 项目 | 结果 |
+| --- | --- |
+| 日期 / 状态 | 2026-10-28（Asia/Shanghai），T033已完成；下一项T034，M5未结束 |
+| 交付文件 | [演示讲稿](demo.md)、[面试材料](interview.md) |
+| 内容 | 业务主线、架构图及源码入口、完整演示顺序、两个核心异常案例、带场景的真实指标；30秒/2分钟介绍、4条简历要点和10个源码追问 |
+| 核对方式 | 阅读当前源码和既有T030/T031/T032报告，检查文件链接、状态/时序及指标；未启动服务、复跑故障或性能负载，未新建业务/登记/授权 |
+
+### 1. 演示材料与已执行证据
+
+讲稿以Java任务/执行批次、可靠上传、版本复核/授权、事务与恢复为重心，Fabric保持两方法摘要登记定位。先解释设备进度、定版、人工复核、链确认及任务完成的不同条件，再按角色完成一条业务链路。架构图区分直接HTTP业务、私有文件存储、Outbox消息处理及持久业务恢复；源码入口全部指向当前实现。
+
+完整演示引用T032副本`.local/deployment-repro/20261028T143649Z-8cd56664/workspace/.local/full-demo/20261028T143857Z-0e100632/`：report为142次记录API/923项检查，另有真实三设备6次HTTP及实际下载GET；四版本正式对象、双机构登记及原有效commit通过。重查`rechecks/20261028T144034Z-cbe2a83e/`为30次API/217项检查、0新增业务登记。不是T033本轮新执行，也不将检查数当作独立单测或吞吐。
+
+文档区分主项目与隔离副本的目录、数据库和链；自动新演示会保留新成果，读取既有成果应选正确环境及原runId。已完成任务用于历史展示；需要逐步展示中间状态时另建手动任务，不改写旧结果。
+
+### 2. 两个异常案例的准确性
+
+案例一采用T030`.local/publish-crash-probe/20261028T010847Z-35d4a8bf/`：真实发布确认后、SENT前halt；自然等待发送租约剩余119823ms，同eventId实际三次交付（含一次显式post-DONE重放），三个测试上传各一个正式版本/存证业务记录/有效尝试。说明本地事务Outbox、mandatory/confirm、条件更新、持久消费幂等和唯一约束，不宣称跨系统严格exactly-once。
+
+案例二采用T030`.local/fabric-crash-probe/20261028T011136Z-47d9a177/`：三种真实JVM退出窗口，默认恢复自然等待剩余115689ms，recoveryPreparedTransactions=0；优先原commit查询或原交易恢复，UNKNOWN有持久退避，明确并发冲突INVALID才按预算允许新attempt。只在登记查询成功且未命中时恢复原交易；查询不可用或摘要/身份冲突分别保存不确定/明确错误。
+
+after-submit项合法保留原attempt SUBMITTING、commit字节及本地validationCode/block为空，通过真实不可变登记对账到业务CONFIRMED；没有补造本地VALID。定版/存证的120秒租约/30秒续租与Outbox120秒发送租约（确认最长10秒、无该续租）分开；ACK/DONE可以表示持久恢复责任移交，不等于业务已成功。租约防止失权者提交数据库结果，不撤回已经发生的外部I/O；UNAVAILABLE是测试调用边界注入，未物理停共享Fabric。
+
+### 3. 指标、实现与依赖边界
+
+T031按具体负载引用：任务进度并发5、2293次、P95 26.88ms；五active设备891次、P95 66.49ms；17MiB×5各3片，202 P50/P95 70.83/80.84ms，创建至确认观测10.066/14.224s。单机约10秒闭环、小可见数据集、预热、同机资源及n5的P95=max、250ms轮询等限制同时展示；不改写为生产QPS、链TPS或纯共识时延。
+
+面试说明区分应用编写的状态机/权限SQL/幂等/租约/恢复编排与框架提供的事务、行锁、签名、消息确认和Fabric共识能力。JWT不携带业务角色，权限从数据库当前状态重验；Redis当前不绕过SQL；签名URL的撤销窗口、机构User1身份和链外元数据边界均写明。简历要点仅用于实际参与且能够解释的个人项目能力，不虚构生产经历、真实飞控或未测提升比例。
+
+### 4. 文档修正与收尾
+
+源码复核发现此前deployment.md关于“授权自然到期可能让完整复查失败”的表述过宽。当前run-demo.read_business显式支持APPROVED/EXPIRED：正常到期检查非成员空列表/403，Java检查器也允许存储APPROVED但currently_valid=false。已修正文案，区分正常到期、检查过程中跨边界及另行撤销/权限变更；没有修改代码、续授权或重新运行复查。
+
+README、后端说明与任务入口已链接两份材料，T034仍为待开始。本轮仅做文档和既有证据核对，不重复未改变生产实现的517单测或完整T030矩阵，不把历史PASS冒充新跑。最终交付版本、全项一致性及M5收尾由T034处理。
+
+文档/证据一致性检查报告：`.local/presentation-checks/20261028T151913Z-37f8aa6a/report.json`。该检查只读取文件与既有报告，不代表新跑业务验收。
+
+## T034：最终交付核对与任务收尾
+
+| 项目 | 结果 |
+| --- | --- |
+| 日期 / 版本 | 2026-10-29（Asia/Shanghai）；0.1.0 MVP，交付标识 `mvp-0.1.0-20261029` |
+| 交付说明 | [delivery.md](delivery.md)，记录阅读/运行入口、需求映射、12项验收、产物摘要及限制 |
+| 完成范围 | D001～D003、T001～T034已完成，M0～M5通过；无未处理必交项 |
+| 本次证据 | `.local/delivery-checks/20261028T220451Z-338b45d3/`；静态审计、源码清单、只读依赖复查和编译目录漂移记录 |
+| 执行边界 | 本轮新执行文件/摘要/接口/迁移核对，以及SELECT/GET/链查询；未新跑完整功能矩阵、性能、故障或业务演示 |
+
+### 1. 需求、接口及历史证据
+
+逐项阅读FR-01～FR-08、非功能要求和AC-01～AC-12；当前实现覆盖全部首版必交能力。实际Controller与全量接口目录均48项，方法/路径完全相等，每项都有HTTP请求示例。V1～V14迁移连续，共25张应用表，设计全部有对应表行；24张业务表参与保留快照，audit_log独立追加。PNG/PDF必测资料及MP4普通归档均有T030多分片探针的真实上传、定版和字节回读。
+
+重新核对T030的17个已通过组件、全部12个AC及95个历史证据文件引用的SHA，未把工具的部署层后续改动冒充当时执行代码。T031实测和T032隔离部署/整套重启沿用其明确日期及原始报告；T033材料仍按原指标、失败语义与框架边界描述。历史测试数与本轮静态/只读检查分别记录，不虚构本轮517项测试或新的吞吐结论。
+
+本次修正接口目录中POST /issues的角色标注：实际仅任务内OrgB OPERATOR_USER可登记，OWNER_REVIEWER负责复核。设计说明改为当前实现，保留旧“HTTP接口草案”链接锚点；Redis说明以SQL为权威，缓存是可重建副本。后端文档明确各任务小节是当时阶段的记录，当前完成状态统一指向交付说明。
+
+### 2. 编译目录漂移及恢复
+
+最初调用产物绑定检查失败：当前backend/target/classes共351文件，其中315个class与已验收JAR不同，36项资源一致，无缺失或多余。漂移class的mtime集中在北京时间2026-10-29 06:00:30～31；生产源码、后端JAR、链码JAR和依赖classpath摘要仍与T030一致。两个字节码major均65，抽查入口类主要差异为常量池排序/引用编号；只能推测其他编译器或IDE重编译，不能确定来源或推断全部类语义等价。
+
+先保存315个原生成class及逐文件SHA/大小/mtime到本次私有目录，核对源码/两个JAR/classpath与T030一致后，从验收JAR恢复对应生成输出；没有修改生产源码、JAR、资源、迁移或业务规则。随后完整binding及每项classes/资源与JAR载荷匹配均通过，恢复后五项摘要见[交付说明](delivery.md#4-产物标识与本次修正)。漂移记录为binding-drift.json，恢复记录为binding-restored.json，原文件位于generated-classes-before-restore/。
+
+### 3. 本轮只读依赖与原成果保持
+
+采用RetainedDemoInspector只读MySQL事务、S3 GET和双机构Gateway查询，不启动Spring应用或恢复/消费Worker。前后完整二十四表schema/250行逐字段及BLOB、V1～V14完整迁移历史、.env及原演示凭据精确一致；snapshotSha256仍为`15ac4cf5d0f59ef7af6df9da77d7a29dc338da2308645482e3f90e8f3d04711d`，verification_record仍63，未追加核验记录。
+
+10个正式对象均实际GET，大小及SHA保持；已确认版本的evidence/version/hash/msp/首次交易编号与双方机构查询一致。运行中两个CaaS实例的实际JAR、镜像和双组织背书/批准包与验收产物一致。Peer/Orderer高度98、区块哈希`YKO0XSEEFMeRBJhq2kKlXDsjn4niE9YpbpV9CihlxBU=`、创世及证书与T032原环境快照一致，没有新链交易。
+
+原9容器的ID/镜像/卷和运行状态保持；T032独立9容器的ID/镜像/卷及停止状态保持。没有清库、删卷、改任务状态、改授权期限或重建凭据/身份。报告为live-report.json及guards/、chain/下的只读证据；本次未保留运行中的项目Java后端或探针。
+
+### 4. 最终交付记录
+
+README、任务清单、后端说明及设计已统一当前交付入口；[delivery.md](delivery.md)记录0.1.0版本、日期、原验收产物五项SHA、需求/AC映射、公开源码与私有运行材料边界，以及模拟设备、开发网络、短期URL、UNKNOWN和实测范围等限制。
+
+本次static-report.json核对公开文档相对链接/标题、48接口/请求、14迁移/25表、34任务状态及95个历史证据引用；source-manifest.json逐项保存公开源码、配置样例、示例和文档的路径/大小/SHA，排除.local、秘密、身份、缓存和target。report.json汇总静态、恢复、只读及隐私检查。私有目录0700、文件0600，公开交付树与本次报告检查未匹配已知秘密、JWT、PEM私钥或原始签名下载地址。
+
+T034完成，M5及本次0.1.0 MVP交付完成。这里的完成指需求约定的可演示首版；未创建Git提交/tag或对外发布。后续有生产实现变更时重新构建并执行新的功能验收，按新增范围另列任务。

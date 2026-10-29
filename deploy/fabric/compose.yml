@@ -1,4 +1,4 @@
-name: uav-inspection-fabric
+name: ${FABRIC_COMPOSE_PROJECT_NAME:-uav-inspection-fabric}
 
 # Project-scoped nodes, DNS aliases and ledger volumes. No host Docker socket is mounted.
 services:
@@ -35,8 +35,8 @@ services:
       ORDERER_OPERATIONS_TLS_ENABLED: "false"
       ORDERER_METRICS_PROVIDER: prometheus
     ports:
-      - "127.0.0.1:7050:7050"
-      - "127.0.0.1:7053:7053"
+      - "127.0.0.1:${FABRIC_ORDERER_PORT:-7050}:7050"
+      - "127.0.0.1:${FABRIC_ORDERER_ADMIN_PORT:-7053}:7053"
     volumes:
       - ./healthcheck.sh:/opt/uav/healthcheck.sh:ro
       - type: bind
@@ -91,7 +91,7 @@ services:
       CORE_OPERATIONS_TLS_ENABLED: "false"
       CORE_METRICS_PROVIDER: prometheus
     ports:
-      - "127.0.0.1:7051:7051"
+      - "127.0.0.1:${FABRIC_ORGA_PEER_PORT:-7051}:7051"
     volumes:
       - ./healthcheck.sh:/opt/uav/healthcheck.sh:ro
       - type: bind
@@ -152,7 +152,7 @@ services:
       CORE_OPERATIONS_TLS_ENABLED: "false"
       CORE_METRICS_PROVIDER: prometheus
     ports:
-      - "127.0.0.1:9051:9051"
+      - "127.0.0.1:${FABRIC_ORGB_PEER_PORT:-9051}:9051"
     volumes:
       - ./healthcheck.sh:/opt/uav/healthcheck.sh:ro
       - type: bind

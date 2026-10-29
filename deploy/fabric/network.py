@@ -11,8 +11,9 @@ import sys
 import time
 
 from prepare import LOCK, NETWORK, ROOT, TOOLS, WORK, check_materials
+from settings import SETTINGS
 
-COMPOSE = ["docker", "compose", "--project-name", "uav-inspection-fabric",
+COMPOSE = ["docker", "compose", "--project-name", SETTINGS.project_name,
            "-f", str(ROOT / "deploy/fabric/compose.yml")]
 RUNTIME_ENV = WORK / "chaincode/runtime.env"
 CHANNEL = LOCK["channel"]
@@ -28,12 +29,15 @@ def execute(arguments, env=None):
 
 
 def compose(*arguments):
+    check_materials()
     # Keep Compose startup output visible without exposing identity contents.
     command = list(COMPOSE)
     if RUNTIME_ENV.exists():
         command.extend(["--env-file", str(RUNTIME_ENV), "-f",
                         str(ROOT / "deploy/fabric/chaincode.compose.yml")])
-    subprocess.run([*command, *arguments], check=True, cwd=ROOT)
+    environment = dict(os.environ)
+    environment.update(SETTINGS.compose_environment())
+    subprocess.run([*command, *arguments], check=True, cwd=ROOT, env=environment)
 
 
 def peer(org, *arguments, user="Admin"):
@@ -43,7 +47,7 @@ def peer(org, *arguments, user="Admin"):
     env.update(FABRIC_CFG_PATH=str(TOOLS / "config"), FABRIC_LOGGING_SPEC="WARN",
                CORE_PEER_LOCALMSPID=f"Org{org}MSP",
                CORE_PEER_MSPCONFIGPATH=str(base / f"users/{user}@org{org}.example.com/msp"),
-               CORE_PEER_ADDRESS=f"localhost:{7051 if org == 1 else 9051}",
+               CORE_PEER_ADDRESS=SETTINGS.peer_endpoint(org),
                CORE_PEER_TLS_ENABLED="true",
                CORE_PEER_TLS_ROOTCERT_FILE=str(base / f"peers/peer0.org{org}.example.com/tls/ca.crt"))
     return execute([TOOLS / "bin/peer", *arguments], env)
@@ -51,7 +55,7 @@ def peer(org, *arguments, user="Admin"):
 
 def orderer(command, *arguments):
     output = execute([TOOLS / "bin/osnadmin", "channel", command, "--no-status",
-                      "-o", "localhost:7053", "--ca-file", ORDERER_TLS / "ca.crt",
+                      "-o", SETTINGS.orderer_admin_endpoint, "--ca-file", ORDERER_TLS / "ca.crt",
                       "--client-cert", ORDERER_TLS / "server.crt",
                       "--client-key", ORDERER_TLS / "server.key", *arguments])
     return json.loads(output)
@@ -117,7 +121,7 @@ def verify(output, compare=None):
         if joined_channels(org) != [CHANNEL]:
             raise RuntimeError(f"Org{org} is not joined to the expected channel")
         fetched = NETWORK / f"channel-artifacts/org{org}-fetched-block0.pb"
-        peer(org, "channel", "fetch", "0", fetched, "-c", CHANNEL, "-o", "localhost:7050",
+        peer(org, "channel", "fetch", "0", fetched, "-c", CHANNEL, "-o", SETTINGS.orderer_endpoint,
              "--ordererTLSHostnameOverride", "orderer.example.com", "--tls",
              "--cafile", ORDERER_TLS / "ca.crt")
         block = decode_block(fetched)

@@ -109,3 +109,14 @@ python3 deploy/fabric/network.py verify --compare .local/fabric/before-recreate.
 ```
 
 比较项包含通道、Peer 高度及区块哈希、排序节点高度、创世头及证书指纹。T004 验证时只有初始配置块；已有链码和存证时也应保留原材料、运行镜像和账本。T006 已验证 SDK 文件检查点恢复，数据库和完整故障恢复仍由后续业务任务验证。
+
+
+## T032隔离namespace及重启复现
+
+完整实测与恢复方法见[部署复现](../../docs/deployment.md)。源码根决定.local身份/账本材料位置；同机第二套环境必须使用独立源码根、FABRIC_COMPOSE_PROJECT_NAME、四个宿主端口和FABRIC_CHAINCODE_IMAGE。默认仍是原项目、7050/7053/7051/9051和原0.1.0镜像；配置名见[.env.example](../../.env.example)。内部节点DNS、监听端口及锚节点不随宿主端口改变。
+
+settings.py集中按字面读取.env并接受相应进程覆盖，校验项目名、端口与明确镜像tag。新materials.json绑定deployment_namespace，后续prepare/up/stop/remove/channel/deploy均拒绝漂移；原无namespace材料仅兼容默认配置，不自动重写。修改Peer宿主端口时，应用的两个FABRIC_ORGA/B_GATEWAY_ENDPOINT须同步。
+
+T032用全新身份和独立镜像真实部署，四版本位于新链块4～7；全部五个链容器普通stop/up后，重复prepare/channel/deploy复用原证书、genesis、批准包和sequence1，Peer/Orderer高度8及当前块哈希保持。原网络高度98及原块哈希/身份完全保持，没有因复现提交原链交易。完整流程不删除卷，最终新环境保留为停止状态。
+
+Linux amd64的工具/样例归档与镜像固定摘要并已离线复用；这不证明冷网络首次拉取或其他平台已验证。开发CaaS明文和单Orderer不构成生产HA部署。

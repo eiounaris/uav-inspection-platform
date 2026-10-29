@@ -30,6 +30,8 @@ import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
 
+from deployment_config import bind_probe_project, infrastructure_project
+
 
 ROOT = Path(__file__).resolve().parents[2]
 RUN_ID_PATTERN = re.compile(r"[a-f0-9]{32}")
@@ -160,6 +162,10 @@ def utc_now():
 class InfrastructureProbe:
     def __init__(self, config, run_id):
         self.config = config
+        try:
+            self.project_name = infrastructure_project(config)
+        except ValueError as error:
+            raise ProbeError(str(error)) from None
         self.run_id = run_id
         self.marker = "uav-infra-probe:" + run_id
         self.mysql_table = "infra_probe_" + run_id
@@ -211,7 +217,7 @@ class InfrastructureProbe:
                   flush=True)
 
     def compose_exec(self, service, script, arguments=(), input_text=None):
-        command = ["docker", "compose", "--project-name", "uav-inspection",
+        command = ["docker", "compose", "--project-name", self.project_name,
                    "--env-file", str(ROOT / ".env"), "-f", str(ROOT / "deploy/compose.yml"),
                    "exec", "-T", service, "sh", "-c", script, "--", *arguments]
         # Ambient application variables must not override the explicit .env.
@@ -383,12 +389,17 @@ class InfrastructureProbe:
         self.s3("DELETE")
 
 
-def select_state(arguments, state_file):
+def select_state(arguments, state_file, project_name="uav-inspection"):
     existing = load_state(state_file)
     supplied = arguments.run_id
     if supplied is not None and not RUN_ID_PATTERN.fullmatch(supplied):
         raise ProbeError("--run-id must contain exactly 32 lowercase hexadecimal characters")
     if arguments.phase == "check":
+        if existing:
+            try:
+                bind_probe_project(existing, project_name)
+            except ValueError as error:
+                raise ProbeError(str(error)) from None
         run_id = supplied or (existing or {}).get("run_id")
         if not run_id:
             raise ProbeError("check requires --run-id or an existing seed state file")
@@ -400,18 +411,26 @@ def select_state(arguments, state_file):
             return existing
     else:
         if existing and existing.get("status") not in ("CLEANED", "RETAINED"):
+            try:
+                bind_probe_project(existing, project_name)
+            except ValueError as error:
+                raise ProbeError(str(error)) from None
             if existing.get("status") not in ("SEEDING", "SEED_FAILED") or (supplied and supplied != existing["run_id"]):
                 raise ProbeError("An active probe already exists; check it first or use a different --state-file")
             return existing
         run_id = supplied or uuid.uuid4().hex
-    return {"schema_version": 1, "run_id": run_id, "created_at": utc_now(),
+    return {"schema_version": 1, "run_id": run_id, "created_at": utc_now(), "project_name": project_name,
             "status": "NEW", "seeded": [], "cleaned": [], "verified": False}
 
 
 def run(arguments):
     config = read_env(ROOT / ".env")
+    try:
+        project_name = infrastructure_project(config)
+    except ValueError as error:
+        raise ProbeError(str(error)) from None
     state_file = arguments.state_file.resolve()
-    state = select_state(arguments, state_file)
+    state = select_state(arguments, state_file, project_name)
     probe = InfrastructureProbe(config, state["run_id"])
     print("run_id=" + probe.run_id, flush=True)
     print("payload_sha256=" + hashlib.sha256(probe.payload).hexdigest(), flush=True)

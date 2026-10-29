@@ -1,6 +1,8 @@
 # 后端工程
 
-Spring Boot 4.1.1、Java 21、Maven 单工程。已实现 HTTP 基础能力、Gateway 适配、MySQL/MyBatis/Flyway、用户认证、T009 任务与初始执行，以及 T010 私有对象存储、持久上传会话与分片幂等；T011 已接入完整文件校验、异步定版和 RabbitMQ Outbox。T012 已接入真实 Fabric 存证消费、二进制交易检查点与 UNKNOWN 恢复；T013 已接入存储文件与上传副本的实际字节核验及核验历史；T014 可保留、可重查的最小真实闭环演示已验收通过，M2 已通过；T015 设备管理、独立设备身份、心跳进度及设备上传已验收通过，T016 集群模拟、CAS 换机与历史批次隔离已通过真实验收；T017 多分片续传与独立版本归档也已通过，T018 固定版本异常与人工复核也已通过真实验收，T019 正式提交验收与任务完成已通过真实 Fabric 确认验收，T020 精确版本共享与受控下载也已通过真实验收，T021 审计查询与证据关系整合已通过真实验收，M3 业务补齐通过；T022 Outbox、消费幂等与安全死信已通过真实故障验收。T023 处理续租和有界业务恢复扫描已通过真实验收。T024 明确失败预算及人工重新检查、T025 引用感知对象清理和跨 JVM 临时文件恢复均已通过真实验收；T026 权限、状态与跨模块并发回归也已通过并修复成员更新死锁；T027 六个真实崩溃窗口及默认恢复也已通过，M4 可靠性完善通过；下一项 T028，进入 M5 联调与交付。实际证据见验证记录。
+Spring Boot 4.1.1、Java 21、Maven 模块化单体。提供身份与资源权限、多机任务、分片续传与固定版本、人工复核、授权共享、真实 Fabric 存证/核验，以及 Outbox、租约和扫描恢复。0.1.0 MVP 的 M0～M5、T001～T034 已完成，完成日期为 2026-10-29；当前版本、产物绑定和限制见[交付说明](../docs/delivery.md)。
+
+T034 最终交付核对已完成。本文各任务小节保留该阶段的验证数字、运行证据和当时范围，旧段落中的“后续任务”“尚未完成”应按该阶段日期理解；当前交付状态、版本和已知限制统一见[交付说明](../docs/delivery.md)。
 
 ## 构建与运行
 
@@ -37,7 +39,7 @@ storage 需要显式提供 S3_ENDPOINT、S3_ACCESS_KEY、S3_SECRET_KEY，使用 
 
 database profile 启用 Hikari、MyBatis 与 Flyway。连接会话使用 UTC 和 READ COMMITTED，Connector/J 默认 sslMode=REQUIRED；生产部署可通过 DB_SSL_MODE 配置更严格的证书校验。普通 local/prod 启动不启用 database 时排除这些自动配置，原 HTTP/Gateway 探针可独立运行。MyBatis SQL 参数日志关闭，local-cache-scope=STATEMENT，锁后权限与成员关系重查不会复用同事务中较早的 SESSION 缓存。
 
-首版迁移 V1__identity_and_task_scope.sql 建立 organization、app_user、inspection_task、task_member、drone 五张表，并创建两个固定机构。roles JSON、机构角色白名单、唯一用户名、创建人机构、设备摘要及外键由数据库约束；username 区分大小写。T008 新增 V2__identity_audit.sql 建立 audit_log；T009 新增 V3__task_execution_scope.sql 建立 inspection_subtask、material_requirement、task_execution。V3 的复合外键限制资料项与子任务属于同一任务、currentExecutionId 属于当前子任务，并以唯一约束限制一个子任务只有一个 READY/RUNNING 批次。T010 新增 V4__upload_sessions_and_versions.sql，建立 upload_session、upload_part、evidence_version；复合外键固定资料项、证据编号、任务、子任务和执行作用域，唯一约束保证主体请求键、分片号和未来版本号不重复。T010 当时不插入 evidence_version；T011 的 V5__finalization_outbox_and_submission.sql 新增 outbox_event、consumed_event、chain_submission，提供事件派发、消费回执和待存证状态。T012 追加 V6__chain_attempts.sql，建立 chain_attempt 保存原 Fabric 交易与确认请求检查点；T013 追加 V7__verification_records.sql，建立 verification_record 保存实际摘要、链上摘要、核验来源、结果及原因；T015 追加 V8__device_reports.sql，建立设备事件去重与执行归属约束；T016 追加 V9__execution_adjustments.sql，保存换机前后批次、操作者、原因及数据库时间，T018 追加 V10__issues_and_reviews.sql，建立固定版本异常 issue 与唯一结论 review_record；T020 追加 V11__version_access_grants.sql，新增精确版本共享 access_grant；T022 追加 V12__durable_message_rejections.sql，扩展 Outbox 的 FAILED 约束并新增安全拒收记录 message_rejection；T024 追加 V13__anchor_retry_requests.sql，仅新增人工重新检查申请表 anchor_retry_request，V1～V12 历史迁移及旧表列保持不变。Flyway 校验开启，自动 baseline 和 clean 关闭，不使用 schema.sql/data.sql；后续结构变化继续追加迁移。
+首版迁移 V1__identity_and_task_scope.sql 建立 organization、app_user、inspection_task、task_member、drone 五张表，并创建两个固定机构。roles JSON、机构角色白名单、唯一用户名、创建人机构、设备摘要及外键由数据库约束；username 区分大小写。T008 新增 V2__identity_audit.sql 建立 audit_log；T009 新增 V3__task_execution_scope.sql 建立 inspection_subtask、material_requirement、task_execution。V3 的复合外键限制资料项与子任务属于同一任务、currentExecutionId 属于当前子任务，并以唯一约束限制一个子任务只有一个 READY/RUNNING 批次。T010 新增 V4__upload_sessions_and_versions.sql，建立 upload_session、upload_part、evidence_version；复合外键固定资料项、证据编号、任务、子任务和执行作用域，唯一约束保证主体请求键、分片号和未来版本号不重复。T010 当时不插入 evidence_version；T011 的 V5__finalization_outbox_and_submission.sql 新增 outbox_event、consumed_event、chain_submission，提供事件派发、消费回执和待存证状态。T012 追加 V6__chain_attempts.sql，建立 chain_attempt 保存原 Fabric 交易与确认请求检查点；T013 追加 V7__verification_records.sql，建立 verification_record 保存实际摘要、链上摘要、核验来源、结果及原因；T015 追加 V8__device_reports.sql，建立设备事件去重与执行归属约束；T016 追加 V9__execution_adjustments.sql，保存换机前后批次、操作者、原因及数据库时间，T018 追加 V10__issues_and_reviews.sql，建立固定版本异常 issue 与唯一结论 review_record；T020 追加 V11__version_access_grants.sql，新增精确版本共享 access_grant；T022 追加 V12__durable_message_rejections.sql，扩展 Outbox 的 FAILED 约束并新增安全拒收记录 message_rejection；T024 追加 V13__anchor_retry_requests.sql，仅新增人工重新检查申请表 anchor_retry_request，V1～V12 历史迁移及旧表列保持不变；T025 追加 V14__storage_cleanup_tasks.sql，建立持久对象清理任务 storage_cleanup_task。当前共 25 张应用表，其中 24 张纳入业务快照，audit_log 另行追加保留。Flyway 校验开启，自动 baseline 和 clean 关闭，不使用 schema.sql/data.sql；后续结构变化继续追加迁移。
 
 demo 必须同时包含 local、database，任何包含 prod 的组合都会被应用自身拒绝。初始化在一个事务中创建以下账号与一台 UAV-DEMO-001，不预造任务、成员、文件或成功状态：
 
@@ -794,3 +796,142 @@ Fabric 组依次使用 setup、提交前、真实提交返回后、真实确认�
 总入口 `--resume <runDirectory>` 可复用已经通过的组件，但要求实际生产 classes 与运行依赖摘要一致；生产实现变化后必须新建矩阵运行。Fabric 组件的 `--recover <runDirectory>` 用于三个预定 halt 已完成而恢复阶段尚未通过的运行，旧失败报告/日志另名保留；`--cleanup <runDirectory>` 只清理已停止运行的自有夹具。已提交链登记和安全审计始终追加保留。观察方式见 [t027.http](../examples/t027.http)，实际结果见 [验证记录](../docs/verification.md#t027跨系统故障注入与恢复验收)。
 
 本轮总矩阵及两个组件均首轮通过：发送/定版组 23 次 HTTP/120 项协调器检查，Fabric 组 20 次 HTTP/155 项检查，六次预定真实 halt 后各三个版本实际确认。原 120 秒租约自然到期，默认扫描在两次 RPC 不可用时保存 UNKNOWN/退避，再恢复原交易；发布确认丢失后的同事件重发和 DONE 后重复 ACK 已核对。513 项后端测试、248 项数据库约束及原 M2 15 次 HTTP/110 项复查通过；区块 39～44 的六条登记追加保留，清理自有夹具后原二十四表及凭据保持。T027 和 M4 已通过，下一项 T028 提供最小管理界面，M5 和完整 MVP 尚未完成。
+
+## 最小管理界面与浏览器联调（T028）
+
+管理界面的 HTML、CSS、SVG 和 ES modules 位于 `src/main/resources/static/`，由 Spring Boot 静态资源处理器随同一 JAR 提供。没有前端打包步骤，不依赖运行时 Node 服务或外部 CDN；Node 和 Playwright 仅用于开发验证。已有业务服务、Fabric 网络及链码正常运行时，在项目根目录执行：
+
+```bash
+python3 deploy/scripts/run-backend.py --ledger
+```
+
+打开 [http://127.0.0.1:8080/](http://127.0.0.1:8080/)。启动器沿用原 `.env`、数据库及普通 User1 身份；已有账号直接登录，首次初始化仍按前文流程显式执行 `--demo`。直接 `java -jar` 的独立 HTTP 模式不启用业务数据库，界面加载成功不代表业务接口已经启用。文件指纹需要支持 Web Crypto 的现代浏览器；HTTP 开发地址使用 localhost/127.0.0.1，其他部署地址应使用 HTTPS。
+
+### 界面范围与操作
+
+| 工作区 | 已接入的操作 |
+| --- | --- |
+| 任务工作台 | 有权限任务的分页、创建、资料要求、运营商分配、按机构维护成员、子任务、初次设备分配/换机、启动、提交验收与完成 |
+| 多机进度与资料 | 子任务当前设备、执行批次、进度、当前资料及历史版本；从任务范围进入上传或打开固定版本 |
+| 文件上传 | 选择资料项/执行批次、文件指纹、分片进度、暂停、查询服务端进度、同会话续传、异步定版状态与固定版本入口 |
+| 版本与复核 | 固定版本及存证状态、待确认提示、人工重新检查、异常登记/查询、通过/退回、原存储文件及上传副本核验、核验历史和短期下载 |
+| 共享授权 | 本人申请、按任务审批、批准/拒绝/撤销、有效期及精确版本打开；一个版本的授权不扩展到其他版本或整个任务 |
+| 设备与审计 | 设备登记/启停、在线状态及分页；按任务查看实际关联的业务审计和诊断编号 |
+
+现有接口没有全机构用户目录，分配和成员维护使用用户编号；可在“当前账号”中复制编号，结合任务已有成员的机构及角色核对。界面不会嵌入演示账号密码或 Fabric/S3 凭据。登记设备时的一次性设备凭据默认遮盖，刷新页面、关闭凭据对话框或退出登录会清除该页面中的值；不会写入本机续传记录。
+
+关键写入使用当前服务器返回的锁号或 PENDING 复核状态。409 冲突时刷新当前状态并保留表单内容，让用户核对后重新提交，不自动覆盖其他操作。页面按钮根据当前角色和状态提示可用操作，服务端仍重新校验身份、成员、精确授权、状态及锁号；隐藏按钮不能替代权限检查。上传完成接口返回 202 只表示已接纳定版，存证 UNKNOWN 仍显示结果待确认，不显示为已经成功。
+
+### 登录与续传
+
+JWT 仅保存在当前页面的 JavaScript 内存，通过同源 API 的 Bearer 请求头发送，不写 `localStorage`、`sessionStorage` 或 Cookie；页面刷新后需重新登录。退出或身份失效会销毁当前页面模块、终止尚未完成的请求，并停止旧页面回调更新界面。
+
+只有上传的非凭据元数据进入同来源、同标签页 `sessionStorage`，按当前账号编号分区：稳定的 clientRequestId、uploadId、资料项/执行批次、文件名称/类型/大小、内容指纹及处理状态。文件字节、密码、JWT、设备令牌和下载地址不在其中；关闭标签页或清除会话存储后，不保证本机记录仍存在。刷新重登同一账号后，在上传工作区选择已保存会话、重新选择原文件，再查询服务器已登记分片，继续发送缺片。
+
+文件指纹逐块覆盖全部字节，默认每块 4 MiB，并对带版本域的分块摘要列表再次计算摘要，避免只比较文件名或首尾片。该指纹用于重新选择文件的续传一致性检查，不是正式文件的 SHA-256；正式摘要仍由后端实际文件校验产生。实际发送分片的大小和数量以服务器会话为准，不由该指纹块大小决定。暂停或 503 后保留请求编号和会话信息；会话创建响应不明时沿原请求编号查询/重试，不直接新建另一个版本。存储记录不可读或无法保存时，上传停止并显示原因。
+
+### 同源与浏览器边界
+
+只有 GET `/`、`/index.html`、`/ui/**` 及既有状态/登录入口公开；其余 API 和写入方法继续使用原用户或设备安全链。静态路径不提供 API 代理，也没有新增跨域通配配置。页面及接口携带 CSP，脚本/样式/连接仅允许自身来源，禁止对象、外部 base 及页面嵌套，并保留 DENY、nosniff 和 no-referrer；脚本和样式放在外部静态文件。动态业务文本通过 DOM 的文本接口呈现，不解释为 HTML。
+
+短期签名地址只在需要时取得并用于浏览器导航，不保存到续传记录或审计；服务端仍记录“下载地址签发”，不会将其当作实际下载成功。副本核验通过原 COPY 接口，不覆盖正式对象或新建版本。
+
+### 本地协议测试与真实浏览器验证
+
+本机 Node 24 可直接执行两组共 31 项无第三方依赖的协议测试，分别报告 15 项和 16 项：
+
+```bash
+node frontend-tests/api.test.mjs
+node frontend-tests/upload.test.mjs
+```
+
+覆盖 API 正文及身份生命周期、完整文件指纹、服务端缺片计划、创建结果不明后的同键恢复、暂停/重入、账号隔离和损坏存储拒绝等边界。本地协议测试已通过；它不连接真实业务服务，不能替代浏览器、数据库及链确认的联调。
+
+需要浏览器自动化时，可在忽略提交的私有目录准备固定 Playwright 1.56.1 和 Chromium headless shell。它们不是后端运行依赖：
+
+```bash
+npm install --prefix .local/browser-tools --no-save --package-lock=false playwright@1.56.1
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.local/ms-playwright" node .local/browser-tools/node_modules/playwright/cli.js install chromium --only-shell
+mvn -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -P database-probe,fabric-probe clean verify
+python3 deploy/scripts/verify-ui.py
+```
+
+真实探针运行前停止其他项目后端和消息消费者。脚本自行启动打包应用及隔离消息拓扑；`UiBrowserFixture` 只初始化随机测试账号、只读检查实际结果并安全收尾，正常任务、上传、复核、共享及核验由浏览器通过正式页面驱动。夹具明文密码和令牌只在进程内存中使用，不进入 argv、报告或临时凭据文件。结束先等待本轮工作静止，停止自己的浏览器/后端，再删除自有链外夹具，比较原二十四表全字段/BLOB；已发生的安全审计和真实链登记继续追加保留。
+
+报告、日志和桌面/窄屏截图位于 `.local/ui-probe/<runId>/`，目录 0700、文件 0600，成功运行由 `.local/ui-probe/latest.json` 指向。截图在关闭凭据对话框后生成，不展示明文设备凭据。T028 最终 JAR 已通过 517 项后端测试、31 项协议测试、204 项真实浏览器检查、248 项数据库约束及原 M2 的 15 次 HTTP/108 项复查。完整页面场景、四条追加链登记、失败修正和清理证据见 [验证记录](../docs/verification.md#t028最小管理界面与真实浏览器联调)；静态资源检查见 [t028.http](../examples/t028.http)。T028 完成，下一项 T029；M5 的最终验收、压测及交付仍单独执行。
+
+
+## 可保留全量业务演示（T029）
+
+接口及变量统一入口为 [examples/README.md](../examples/README.md) 和 [t029.http](../examples/t029.http)；自动脚本及前置步骤见 [T029 演示说明](../docs/t029-demo.md)。原生 Python 标准库脚本复用现有打包应用运行器，不增加后端业务依赖、迁移或 API。构建需启用 database-probe,fabric-probe，以编译 SELECT-only RetainedDemoInspector。
+
+```bash
+python3 deploy/scripts/test_run_demo.py
+python3 deploy/scripts/run-demo.py
+python3 deploy/scripts/run-demo.py --recheck .local/full-demo/<runId>
+```
+
+默认运行保留新任务、四设备、三子任务及四个固定版本：先用三台设备上报，人工换机并验证旧批次迟到隔离，再演示 V1 复核/共享与 V2 独立复核/授权，完成后撤销 V1、批准 V2，实际原文件/副本核验及签名下载。原账号只登录，不调用 logout、不修改角色或密码；新设备凭据只在进程内存使用。演示任务完成后不需要重用这些一次性凭据继续上报。
+
+启动前要求全库在途上传、Outbox、存证、消费及清理工作收敛；独立消息拓扑不能隔离共享数据库的默认恢复扫描。只读 helper 对创建前二十四表逐主键记录全字段/BLOB 摘要和原迁移行，完成后要求全部原行仍在且不变，并实际读取本轮分片/正式对象、双机构账本及原 commit 有效回执。复查另比较本次开始前完整二十四表快照，要求业务行、数量、字段全部保持；登录 AUTH_LOGIN 审计正常追加，业务读取不写新核验。
+
+当四个版本已经实际 CONFIRMED+APPROVED、后续业务中断时，`python3 deploy/scripts/run-demo.py --resume .local/full-demo/<runId>` 先复核持久成果再继续验收/授权/核验，不重复上传或链登记。已有相同核验结果按来源、结果及实际摘要复用；不满足检查点或原授权已不可撤销时按真实状态拒绝，不强写状态。失败与续跑报告分别保留，成功续跑资源由 latest-resume.json 指向，后续 --recheck 可仍使用源目录。
+
+私有运行目录为 `.local/full-demo/<runId>/`（0700，报告/日志0600），正常成果不做夹具删除。只删除自己的空消息拓扑并停止自己的后端。下载地址仅用于内存中实际 HTTP GET，不落盘；样例 PNG 和 JSON 可提交版本库，密码和所有令牌仍使用原私有凭据文件或进程内存。
+
+
+## 全部 AC 最终功能验收（T030）
+
+运行方式和判读见 [T030 最终验收](../docs/t030-acceptance.md)。`verify-final.py` 不是已有报告的静态汇总：它串行新执行设备/多机/多片、核验/共享/完成/并发、清理/消息/续租/崩溃恢复、链码与真实 UI，再验证数据库及已保留成果。每项运行必须发布新的成功索引，当前矩阵记录原始报告路径和文件哈希。
+
+独占运行前后由 RetainedDemoInspector 获取一致的二十四表快照、原迁移历史及配置/凭据摘要；常规夹具清理后要求完整业务表恢复，只允许最后原 M2 复查追加三条业务核验，审计和真实链登记继续保留。生产 JAR 与完整 target/classes 内容逐文件比较，再锁定生产源码、运行类/资源、依赖和链码 JAR；Java 探针与打包 UI 因而对应同一最终生产实现。链码另核对运行容器内 JAR、镜像、原部署锁、双方提交策略和批准包，不重部署。
+
+```bash
+python3 deploy/scripts/test_verify_final.py
+python3 deploy/scripts/verify-final.py
+python3 deploy/scripts/verify-final.py --resume .local/final-acceptance/<runId>
+```
+
+真实业务报告、数据库/对象/账本证据以及逐 AC 门槛均通过才写总 PASS。`--resume` 只复用该矩阵当前产物下已成功且哈希/工具摘要未变的组件；不能用历史 T027 或 T029 的 PASS 直接满足本轮最终验收。若修改生产代码或依赖，应重建并开启新矩阵。仍在使用的随机夹具凭据、未知交易或未来租约均不得通过清库、删对象或强改状态来跳过。
+
+
+## 性能与资源实测（T031）
+
+方法、实际环境和逐文件结果见[性能记录](../docs/performance.md)。使用T030已经通过的打包JAR，测试源码只新增PerformanceInspector，执行 `test-compile` 编译辅助类；生产JAR、源码/classes/依赖和链码绑定均未变化。正常Outbox扫描1000ms，定版/存证各1个实际消费者、prefetch=1，Hikari最大5；压测不调整这些配置。
+
+```bash
+mvn -o -B -ntp -Dmaven.repo.local="$PWD/.local/m2" -f backend/pom.xml -Pdatabase-probe,fabric-probe -DskipTests test-compile
+python3 -m unittest discover -s deploy/scripts -p '*perf*.py' -v
+python3 deploy/scripts/run-performance.py
+```
+
+查询每档并发1/3/5，设备active3/5，各正式阶段至少10秒，预热排除；文件是1MiB×3串行、1MiB×3并行、17MiB×5并行。本轮30,343查询、1,756正式上报及11正式文件无错误；12含预热版本均single VALID、双机构账本/原commit及正式对象实际重查一致。查询P95 8.78～26.88ms；5路17MiB的创建至确认观测为5.87～14.22s，包含后台排队与轮询，不代表纯commit延迟。
+
+私有报告位于 `.local/performance/20261028T020815Z-c952459a/`；原24表250行、10正式对象及凭据保持，本轮SQL/对象夹具与空拓扑已清理。两个资源采样线程分别采进程与Docker，CPU/RSS、样本覆盖及观察开销单列；9容器均已实测，资源错误0。工具21项测试通过；本轮没有为未变更的生产代码重复完整T030功能矩阵。下一步T032，M5仍待部署复现及后续交付。
+
+
+## 部署复现与普通重启（T032）
+
+首次完整部署以[根README](../README.md#首次部署)为入口，隔离步骤与实际证据见[部署复现](../docs/deployment.md)。T032在独立源码目录、新配置/凭据、空业务与账本卷上，重新构建并运行本应用；原target、身份和数据未复制，仅复用已校验的依赖/归档/镜像缓存。
+
+```bash
+python3 deploy/scripts/verify-deployment.py
+```
+
+本轮42步骤PASS，源码重建517后端/50链码测试通过，另32部署工具测试通过。新环境首次启动执行V1～V14迁移并初始化6账号/1设备，真实三设备模拟器各2报告后，正常业务演示完成4版本CONFIRMED/APPROVED；142次API/923项检查及另6次模拟器HTTP通过。
+
+9容器全部stop/up后，重新运行prepare/channel/deploy和demo初始化均复用原材料/定义/凭据；只读复查30次API/217项检查通过，新24表91行、4正式对象、原commit及链高度8保持。普通后台启动另由initial/restart两次run-backend --demo --ledger证明，不能将禁用后台的只读复查写成后台恢复压测。原24表250行、10对象、原链高度98及容器/镜像/卷均保持。
+
+部署配置新增两个Compose项目名、四Fabric宿主端口及独立CaaS镜像tag。默认值兼容现有环境；非默认namespace只在全新根及新材料使用，两个Gateway endpoint须随Peer宿主端口同步。SERVER_PORT仍由进程环境提供；.env不切换JAVA_HOME。下一项T033，未提前结束M5。
+
+
+## 演示与面试材料（T033）
+
+[演示讲稿](../docs/demo.md)包含业务与架构、完整三设备/四版本流程，以及Outbox确认后崩溃、Fabric原交易恢复两个源码/真实证据关联案例。[面试材料](../docs/interview.md)提供介绍、简历要点和十个追问，区分Java应用机制与Spring/MySQL/RabbitMQ/S3/Fabric提供的能力。
+
+材料引用T030异常、T031性能及T032完整演示，明确ACK/DONE不等于业务完成、UNKNOWN不等于明确失败、业务CONFIRMED不强制补造本地VALID；处理租约的30秒续租与Outbox发送租约分开。Redis在线判定仍以SQL为权威，不能宣称命中绕过SQL。T033只核对文档和现有证据，没有重跑业务或改生产代码；T034核对结果见[交付说明](../docs/delivery.md)。
+
+
+## 最终交付核对（T034）
+
+48项接口及HTTP示例、V1～V14迁移/25张应用表与需求设计一致，既有17组件/12AC证据完整。T034新执行只读数据库/对象/链查询：原24表250行、10对象、63核验记录、双机构原登记与链高度98保持，原9容器运行、隔离9容器停止。初次核对发现315个生成class与验收JAR漂移，保留差异和原class后从该JAR恢复，当前源码与五项产物绑定通过。未改生产实现，也未把历史功能/性能/部署PASS写成新跑。M5与本次MVP已完成，入口及后续变更验证方式见[最终交付](../docs/delivery.md)。

@@ -1,7 +1,7 @@
 # Merged with compose.yml only after chaincode.py creates runtime.env.
 services:
   evidence-org1:
-    image: uav-inspection/evidence-chaincode:0.1.0
+    image: ${FABRIC_CHAINCODE_IMAGE:-uav-inspection/evidence-chaincode:0.1.0}
     restart: unless-stopped
     environment:
       CHAINCODE_SERVER_ADDRESS: 0.0.0.0:9999
@@ -15,7 +15,7 @@ services:
       start_period: 15s
 
   evidence-org2:
-    image: uav-inspection/evidence-chaincode:0.1.0
+    image: ${FABRIC_CHAINCODE_IMAGE:-uav-inspection/evidence-chaincode:0.1.0}
     restart: unless-stopped
     environment:
       CHAINCODE_SERVER_ADDRESS: 0.0.0.0:9999

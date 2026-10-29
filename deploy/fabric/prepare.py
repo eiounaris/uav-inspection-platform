@@ -13,6 +13,8 @@ import sys
 import tarfile
 import urllib.request
 
+from settings import SETTINGS, check_namespace
+
 ROOT = Path(__file__).resolve().parents[2]
 WORK = ROOT / ".local/fabric"
 TOOLS = WORK / "tools"
@@ -46,6 +48,7 @@ def check_materials():
     if not marker.is_file():
         raise RuntimeError("Run prepare.py before starting this network")
     state = json.loads(marker.read_text())
+    check_namespace(state)
     for key in ("fabric_version", "samples_commit", "channel"):
         if state.get(key) != LOCK[key]:
             raise RuntimeError("Pinned versions differ from existing identities; keep the existing network intact")
@@ -127,6 +130,8 @@ def prepare():
     if platform.system() != "Linux" or platform.machine() not in ("x86_64", "amd64"):
         raise RuntimeError("This development baseline pins Linux amd64 tools")
     os.umask(0o077)
+    if (NETWORK / "materials.json").exists():
+        check_materials()  # Reject namespace drift before touching existing local material.
     WORK.mkdir(parents=True, exist_ok=True)
     binary = fetch(LOCK["binary_archive"],
                    "https://github.com/hyperledger/fabric/releases/download/v" + LOCK["fabric_version"]
@@ -178,7 +183,7 @@ def prepare():
     subprocess.run([str(TOOLS / "bin/configtxgen"), "-profile", "ChannelUsingRaft",
                     "-channelID", LOCK["channel"], "-outputBlock", str(block)], check=True, env=env)
     gateway = {}
-    for org, label, port in ((1, "ORGA", 7051), (2, "ORGB", 9051)):
+    for org, label in ((1, "ORGA"), (2, "ORGB")):
         base = NETWORK / f"organizations/peerOrganizations/org{org}.example.com"
         user = base / f"users/User1@org{org}.example.com/msp"
         keys = list((user / "keystore").glob("*"))
@@ -186,12 +191,13 @@ def prepare():
         if len(keys) != 1 or len(certs) != 1:
             raise RuntimeError("Expected exactly one application key and certificate per organization")
         gateway.update({f"FABRIC_{label}_MSP_ID": f"Org{org}MSP",
-                        f"FABRIC_{label}_GATEWAY_ENDPOINT": f"localhost:{port}",
+                        f"FABRIC_{label}_GATEWAY_ENDPOINT": SETTINGS.peer_endpoint(org),
                         f"FABRIC_{label}_CERT_PATH": str(certs[0]),
                         f"FABRIC_{label}_KEY_PATH": str(keys[0]),
                         f"FABRIC_{label}_TLS_CERT_PATH": str(base / f"peers/peer0.org{org}.example.com/tls/ca.crt")})
     (WORK / "gateway-paths.json").write_text(json.dumps(gateway, indent=2) + "\n")
     state = {key: LOCK[key] for key in ("fabric_version", "samples_commit", "channel")}
+    state["deployment_namespace"] = SETTINGS.namespace()
     state.update(genesis_sha256=sha256(block), certificate_fingerprint=certificate_fingerprint())
     (NETWORK / "materials.json").write_text(json.dumps(state, indent=2) + "\n")
     check_materials()
