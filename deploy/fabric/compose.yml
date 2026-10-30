@@ -1,6 +1,7 @@
 name: ${FABRIC_COMPOSE_PROJECT_NAME:-uav-inspection-fabric}
 
-# Project-scoped nodes, DNS aliases and ledger volumes. No host Docker socket is mounted.
+# Project-scoped nodes, DNS aliases and named volumes. No host Docker socket is mounted.
+# Cover the image VOLUME paths explicitly; child mounts do not prevent anonymous parent volumes.
 services:
   orderer:
     image: hyperledger/fabric-orderer:2.5.16@sha256:e322c57331d37e0a35ffae3cb3d3265a0e852211c0f801f2514cc15b964ffc93
@@ -52,6 +53,8 @@ services:
         bind:
           create_host_path: false
       - orderer-ledger:/var/hyperledger/production/orderer
+      - orderer-runtime:/var/hyperledger
+      - orderer-config:/etc/hyperledger/fabric
     networks:
       default:
         aliases:
@@ -113,6 +116,8 @@ services:
         bind:
           create_host_path: false
       - org1-peer-ledger:/var/hyperledger/production
+      - org1-peer-runtime:/var/hyperledger
+      - org1-peer-config:/etc/hyperledger/fabric
     networks:
       default:
         aliases:
@@ -174,6 +179,8 @@ services:
         bind:
           create_host_path: false
       - org2-peer-ledger:/var/hyperledger/production
+      - org2-peer-runtime:/var/hyperledger
+      - org2-peer-config:/etc/hyperledger/fabric
     networks:
       default:
         aliases:
@@ -190,5 +197,11 @@ networks:
 
 volumes:
   orderer-ledger:
+  orderer-runtime:
+  orderer-config:
   org1-peer-ledger:
+  org1-peer-runtime:
+  org1-peer-config:
   org2-peer-ledger:
+  org2-peer-runtime:
+  org2-peer-config:
