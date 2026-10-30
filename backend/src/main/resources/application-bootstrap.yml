@@ -1,0 +1,3 @@
+inspection:
+  bootstrap:
+    credentials: ${BOOTSTRAP_CREDENTIALS_PATH:.local/bootstrap-credentials.json}

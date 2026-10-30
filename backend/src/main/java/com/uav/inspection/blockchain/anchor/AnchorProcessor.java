@@ -37,11 +37,6 @@ public class AnchorProcessor {
         this.phases=phases; this.clients=clients; this.leases=leases;
     }
 
-    /** Direct legacy tests may opt out of scheduling; Spring always uses the full constructor. */
-    public AnchorProcessor(AnchorTransactions phases,InstitutionLedgerClients clients) {
-        this(phases,clients,ProcessingLeaseKeeper.unmonitored());
-    }
-
     public void process(MessageEvent event) {
         process(event,false);
         phases.verifyAcknowledgement(event);

@@ -12,22 +12,22 @@ from backend_env import ROOT, backend_environment, fabric_environment, java21
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("local", "prod"), default="local")
-    parser.add_argument("--demo", action="store_true", help="Initialize local demo accounts and one device")
+    parser.add_argument("--bootstrap", action="store_true", help="Initialize local business accounts from saved credentials")
     parser.add_argument("--ledger", action="store_true", help="Enable real Fabric business anchoring")
     parser.add_argument("--cleanup", action="store_true", help="Enable reference-aware object and temporary file cleanup")
     args = parser.parse_args()
-    if args.demo and args.profile != "local":
-        parser.error("--demo is only available with --profile local")
+    if args.bootstrap and args.profile != "local":
+        parser.error("--bootstrap is only available with --profile local")
     environment = backend_environment()
     if args.ledger:
         environment = fabric_environment(environment, local=args.profile == "local")
     java = java21(environment)
     jar = ROOT / "backend/target/inspection-backend-0.1.0.jar"
     if not jar.is_file():
-        raise RuntimeError("Build backend/pom.xml with Maven clean verify first")
-    if args.demo and not Path(environment["DEMO_CREDENTIALS_PATH"]).is_file():
-        raise RuntimeError("Run python3 deploy/scripts/init-demo-credentials.py first")
-    profiles = args.profile + ",database,storage,messaging" + (",demo" if args.demo else "")
+        raise RuntimeError("Build backend/pom.xml with Maven clean package first")
+    if args.bootstrap and not Path(environment["BOOTSTRAP_CREDENTIALS_PATH"]).is_file():
+        raise RuntimeError("Run python3 deploy/scripts/init-credentials.py first")
+    profiles = args.profile + ",database,storage,messaging" + (",bootstrap" if args.bootstrap else "")
     if args.ledger:
         profiles += ",ledger"
     if args.cleanup:

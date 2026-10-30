@@ -32,15 +32,6 @@ public class FinalizationProcessor {
     private final TemporaryFileManager temporaryFiles;
     private final FileFormatValidator formats=new FileFormatValidator();
 
-    public FinalizationProcessor(FinalizationTransactions phases,ObjectStorage storage,UploadSettings settings) {
-        this(phases,storage,settings,ProcessingLeaseKeeper.unmonitored());
-    }
-
-    public FinalizationProcessor(FinalizationTransactions phases,ObjectStorage storage,UploadSettings settings,
-                                 ProcessingLeaseKeeper leases) {
-        this(phases,storage,settings,leases,new TemporaryFileManager());
-    }
-
     @Autowired
     public FinalizationProcessor(FinalizationTransactions phases,ObjectStorage storage,UploadSettings settings,
                                  ProcessingLeaseKeeper leases,TemporaryFileManager temporaryFiles) {

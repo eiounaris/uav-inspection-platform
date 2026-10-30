@@ -31,15 +31,15 @@ def backend_environment():
     environment = dict(os.environ)
     # Copy only backend settings, without unrelated service secrets.
     for key, value in values.items():
-        if key.startswith(("DB_", "S3_", "UPLOAD_", "VERIFICATION_", "RABBITMQ_", "MESSAGING_", "FABRIC_", "REDIS_", "DEVICE_", "CLEANUP_")) or key in ("DEMO_CREDENTIALS_PATH", "JWT_SECRET"):
+        if key.startswith(("DB_", "S3_", "UPLOAD_", "VERIFICATION_", "RABBITMQ_", "MESSAGING_", "FABRIC_", "REDIS_", "DEVICE_", "CLEANUP_")) or key in ("BOOTSTRAP_CREDENTIALS_PATH", "JWT_SECRET"):
             environment.setdefault(key, value)
     if not environment.get("DB_PASSWORD"):
         raise RuntimeError("DB_PASSWORD is required in process env or the local .env file")
     if not re.fullmatch(r"[0-9a-f]{64}", environment.get("JWT_SECRET", "")):
         raise RuntimeError("JWT_SECRET must be the original 64-character hex key in process env or .env")
-    demo_path = Path(environment.get("DEMO_CREDENTIALS_PATH") or ".local/demo-credentials.json")
-    environment["DEMO_CREDENTIALS_PATH"] = str(
-        (demo_path if demo_path.is_absolute() else ROOT / demo_path).resolve())
+    credentials_path = Path(environment.get("BOOTSTRAP_CREDENTIALS_PATH") or ".local/bootstrap-credentials.json")
+    environment["BOOTSTRAP_CREDENTIALS_PATH"] = str(
+        (credentials_path if credentials_path.is_absolute() else ROOT / credentials_path).resolve())
     return environment
 
 

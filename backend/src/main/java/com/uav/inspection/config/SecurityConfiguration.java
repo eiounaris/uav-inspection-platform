@@ -108,7 +108,7 @@ public class SecurityConfiguration {
         return http.build();
     }
 
-    // The HTTP foundation and standalone Gateway probe have no database business controllers.
+    // The standalone HTTP foundation has no database business controllers.
     @Bean
     @Profile("!database")
     SecurityFilterChain foundationApi(HttpSecurity http) throws Exception {

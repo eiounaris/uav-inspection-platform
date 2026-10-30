@@ -6,7 +6,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
-import java.nio.charset.StandardCharsets;
 
 @Service
 @Profile("database & storage & messaging")
@@ -46,17 +45,5 @@ public class OutboxTransactions {
         if(code==null || !code.matches("[A-Z][A-Z0-9_]{0,199}")) throw new IllegalArgumentException("Invalid outbox error code");
     }
 
-    public record Delivery(String eventId,String eventType,String bizId,String payload,String token,int attemptCount) {
-        /** Compatibility for local probes; production claims always bind the independent durable columns. */
-        public Delivery(String eventId,String payload,String token,int count) {
-            this(eventId,legacy(payload),payload,token,count);
-        }
-        private Delivery(String eventId,MessageEvent event,String payload,String token,int count) {
-            this(eventId,event==null?null:event.eventType(),event==null?null:event.bizId(),payload,token,count);
-        }
-        private static MessageEvent legacy(String payload) {
-            try { return MessageEvent.decode(payload.getBytes(StandardCharsets.UTF_8)); }
-            catch(RuntimeException invalid) { return null; }
-        }
-    }
+    public record Delivery(String eventId,String eventType,String bizId,String payload,String token,int attemptCount) {}
 }

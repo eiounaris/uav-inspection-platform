@@ -24,7 +24,6 @@ public class ProcessingLeaseKeeper {
     private static final long LEASE_NANOS = TimeUnit.SECONDS.toNanos(120);
     private static final long RENEWAL_MILLIS = 30_000;
     private static final int MAX_TRACKED_LEASES = 64;
-    private static final ProcessingLeaseKeeper UNMONITORED = new ProcessingLeaseKeeper(null, RENEWAL_MILLIS, System::nanoTime);
     private final ScheduledExecutorService scheduler;
     private final long renewalMillis;
     private final LongSupplier clock;
@@ -40,14 +39,10 @@ public class ProcessingLeaseKeeper {
         this.clock = Objects.requireNonNull(clock);
     }
 
-    /** Compatibility only for directly constructed legacy unit/probe processors; Spring injects the real keeper. */
-    public static ProcessingLeaseKeeper unmonitored() { return UNMONITORED; }
-
     public Lease track(BooleanSupplier renewal) {
         Objects.requireNonNull(renewal);
-        if (scheduler == null) return new Lease(renewal, false);
         if (stopped.get() || !slots.tryAcquire()) throw new ProcessingLeaseLostException();
-        Lease lease = new Lease(renewal, true);
+        Lease lease = new Lease(renewal);
         try {
             // The initial renewal also checks the database lease immediately after a committed claim.
             lease.renew();
@@ -66,7 +61,7 @@ public class ProcessingLeaseKeeper {
 
     @PreDestroy
     public void shutdown() {
-        if (scheduler != null && stopped.compareAndSet(false, true)) scheduler.shutdownNow();
+        if (stopped.compareAndSet(false, true)) scheduler.shutdownNow();
     }
 
     private static ScheduledThreadPoolExecutor scheduler() {
@@ -85,15 +80,13 @@ public class ProcessingLeaseKeeper {
 
     public final class Lease implements AutoCloseable {
         private final BooleanSupplier renewal;
-        private final boolean monitored;
         private final AtomicBoolean lost = new AtomicBoolean();
         private final AtomicBoolean closed = new AtomicBoolean();
         private final AtomicReference<ScheduledFuture<?>> future = new AtomicReference<>();
         private volatile long verifiedAt;
 
-        private Lease(BooleanSupplier renewal, boolean monitored) {
+        private Lease(BooleanSupplier renewal) {
             this.renewal = renewal;
-            this.monitored = monitored;
         }
 
         private void renew() {
@@ -112,7 +105,7 @@ public class ProcessingLeaseKeeper {
 
         public void check() {
             if (Thread.currentThread().isInterrupted()) lose();
-            if (monitored && (stopped.get() || clock.getAsLong() - verifiedAt >= LEASE_NANOS)) lose();
+            if (stopped.get() || clock.getAsLong() - verifiedAt >= LEASE_NANOS) lose();
             if (closed.get() || lost.get()) throw new ProcessingLeaseLostException();
         }
 
@@ -126,7 +119,7 @@ public class ProcessingLeaseKeeper {
             if (!closed.compareAndSet(false, true)) return;
             ScheduledFuture<?> current = future.get();
             if (current != null) current.cancel(false);
-            if (monitored) slots.release();
+            slots.release();
         }
     }
 }

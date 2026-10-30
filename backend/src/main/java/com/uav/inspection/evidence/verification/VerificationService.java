@@ -47,11 +47,6 @@ public class VerificationService implements AutoCloseable {
     private final ThreadPoolExecutor closers;
     private final Set<Guard> active=ConcurrentHashMap.newKeySet();
 
-    public VerificationService(VerificationTransactions transactions,ObjectStorage storage,
-                               InstitutionLedgerClients clients,VerificationSettings settings) {
-        this(transactions,storage,clients,settings,new TemporaryFileManager());
-    }
-
     @Autowired
     public VerificationService(VerificationTransactions transactions,ObjectStorage storage,
                                InstitutionLedgerClients clients,VerificationSettings settings,

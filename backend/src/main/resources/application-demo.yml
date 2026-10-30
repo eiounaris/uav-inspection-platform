@@ -1,3 +1,0 @@
-inspection:
-  demo:
-    credentials: ${DEMO_CREDENTIALS_PATH:.local/demo-credentials.json}

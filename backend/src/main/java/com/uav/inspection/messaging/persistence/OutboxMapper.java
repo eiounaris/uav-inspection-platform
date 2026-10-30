@@ -5,9 +5,6 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import org.apache.ibatis.annotations.AutomapConstructor;
-import com.uav.inspection.messaging.MessageEvent;
-
-import java.nio.charset.StandardCharsets;
 
 public interface OutboxMapper {
     @Insert("""
@@ -67,16 +64,5 @@ public interface OutboxMapper {
 
     record PendingRow(String eventId,String eventType,String bizId,String payload,int attemptCount) {
         @AutomapConstructor public PendingRow {}
-        /** Local source compatibility; real queries always read the independent durable identity columns. */
-        public PendingRow(String eventId,String payload,int attemptCount) {
-            this(eventId,legacy(payload),payload,attemptCount);
-        }
-        private PendingRow(String eventId,MessageEvent event,String payload,int count) {
-            this(eventId,event==null?null:event.eventType(),event==null?null:event.bizId(),payload,count);
-        }
-        private static MessageEvent legacy(String payload) {
-            try { return MessageEvent.decode(payload.getBytes(StandardCharsets.UTF_8)); }
-            catch(RuntimeException invalid) { return null; }
-        }
     }
 }

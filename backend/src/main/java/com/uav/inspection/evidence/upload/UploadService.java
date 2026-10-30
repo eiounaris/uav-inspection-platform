@@ -38,10 +38,6 @@ public class UploadService {
     private final UploadTransactions transactions;
     private final TemporaryFileManager temporaryFiles;
 
-    public UploadService(UploadSettings settings, ObjectStorage storage, UploadTransactions transactions) {
-        this(settings,storage,transactions,new TemporaryFileManager());
-    }
-
     @Autowired
     public UploadService(UploadSettings settings,ObjectStorage storage,UploadTransactions transactions,
                          TemporaryFileManager temporaryFiles) {

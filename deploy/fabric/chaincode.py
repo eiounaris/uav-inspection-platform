@@ -153,7 +153,7 @@ def deploy():
     check_materials()
     jar = ROOT / "chaincode/target/evidence-chaincode-0.1.0.jar"
     if not jar.is_file():
-        raise RuntimeError("Build chaincode/pom.xml with Maven clean verify first")
+        raise RuntimeError("Build chaincode/pom.xml with Maven clean package first")
     jar_hash = hashlib.sha256(jar.read_bytes()).hexdigest()
     dockerfile_hash = hashlib.sha256((ROOT / "chaincode/Dockerfile").read_bytes()).hexdigest()
     previous = DIRECTORY / "deployment.json"
